@@ -6,6 +6,36 @@
 // Reference:
 // http://stackoverflow.com/questions/14086417/how-to-write-custom-input-stream-in-c
 
+/* 
+   Certain parts of the code, specifically for BGZF support, were taken out of bgzf.h and bgzf.c
+   from htslib https://github.com/samtools/htslib and so must include the MIT License below
+*/
+
+/* The MIT License
+
+   Copyright (c) 2008 Broad Institute / Massachusetts Institute of Technology
+                 2011, 2012 Attractive Chaos <attractor@live.co.uk>
+   Copyright (C) 2009, 2013-2020 Genome Research Ltd
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+   THE SOFTWARE.
+*/
+
 #pragma once
 
 #include <cassert>
@@ -65,47 +95,46 @@ typedef struct
 bgzidx1_t;
 
 class packer {
+public:
 
-    public:
+    static inline void packInt16(uint8_t *buffer, uint16_t value)
+    {
+    #ifdef ZSTR_IS_LITTLE_ENDIAN
+        *((uint16_t *)buffer) = value;
+    #else
+        buffer[0] = value;
+        buffer[1] = value >> 8;
+    #endif
+    }
 
-static inline void packInt16(uint8_t *buffer, uint16_t value)
-{
-#ifdef ZSTR_IS_LITTLE_ENDIAN
-    *((uint16_t *)buffer) = value;
-#else
-    buffer[0] = value;
-    buffer[1] = value >> 8;
-#endif
-}
+    static inline uint16_t unpackInt16(const uint8_t *buffer)
+    {
+    #ifdef ZSTR_IS_LITTLE_ENDIAN
+        return *((uint16_t *)buffer);
+    #else
+        return buffer[0] | buffer[1] << 8;
+    #endif
+    }
 
-static inline uint16_t unpackInt16(const uint8_t *buffer)
-{
-#ifdef ZSTR_IS_LITTLE_ENDIAN
-    return *((uint16_t *)buffer);
-#else
-    return buffer[0] | buffer[1] << 8;
-#endif
-}
+    static inline void packInt32(uint8_t *buffer, uint32_t value)
+    {
+    #ifdef ZSTR_IS_LITTLE_ENDIAN
+        *((uint32_t*)buffer) = value;
+    #else
+        buffer[0] = value;
+        buffer[1] = value >> 8;
+        buffer[2] = value >> 16;
+        buffer[3] = value >> 24;
+    #endif
+    }
 
-static inline void packInt32(uint8_t *buffer, uint32_t value)
-{
-#ifdef ZSTR_IS_LITTLE_ENDIAN
-     *((uint32_t*)buffer) = value;
-#else
-    buffer[0] = value;
-    buffer[1] = value >> 8;
-    buffer[2] = value >> 16;
-    buffer[3] = value >> 24;
-#endif
-}
-
-static inline uint32_t unpackInt32(const uint8_t *buffer) {
-#ifdef ZSTR_IS_LITTLE_ENDIAN
-    return *((uint32_t*)buffer);
-#else
-    return buffer[0] | buffer[1] << 8 | buffer[2] << 16 | buffer[3] << 24;
-#endif
-}
+    static inline uint32_t unpackInt32(const uint8_t *buffer) {
+    #ifdef ZSTR_IS_LITTLE_ENDIAN
+        return *((uint32_t*)buffer);
+    #else
+        return buffer[0] | buffer[1] << 8 | buffer[2] << 16 | buffer[3] << 24;
+    #endif
+    }
 
 };
 
@@ -206,13 +235,15 @@ private:
 
 } // namespace detail
 
-class bgzf_virtual_file_pointer {
+class bgzf_virtual_file_pointer 
+{
     // a virtual file pointer represents a byte in the uncompressed stream.
     // and can be used to efficiently seek to the bgzf_ostream to that byte
     // but does not know the precise offset from the beginning of the stream.
     // physical_pos must always be the position in the compressed stream of a block header
     uint64_t physical_pos : 48;
     uint64_t block_pos    : 16;
+
 public:
     bgzf_virtual_file_pointer() : physical_pos{}, block_pos{} {}
     bgzf_virtual_file_pointer(size_t file_offset, uint16_t block_offset)
@@ -237,8 +268,10 @@ public:
     uint16_t get_block_offset() const { return block_pos; }
 };
 
-class bgzf_index {
+class bgzf_index 
+{
 public:
+
     bgzf_index() {}
     bgzf_index(std::istream &is) {
         read_index(is);
@@ -473,8 +506,9 @@ protected:
 
 }; // class _istreambuf
 
-class istreambuf : public _istreambuf {
-   public:
+class istreambuf : public _istreambuf 
+{
+public:
     istreambuf(std::streambuf * _sbuf_p,
                std::size_t _buff_size = default_buff_size, bool _auto_detect = true, int _window_bits = 0)
                : _istreambuf(_sbuf_p, _buff_size, _auto_detect, _window_bits) {
@@ -772,7 +806,8 @@ protected:
 
 }; // class _ostreambuf
 
-class ostreambuf : public _ostreambuf {
+class ostreambuf : public _ostreambuf 
+{
 public:
     ostreambuf(std::streambuf * _sbuf_p,
                std::size_t _buff_size = default_buff_size, int _level = Z_DEFAULT_COMPRESSION, int _window_bits = 0)
@@ -783,7 +818,6 @@ public:
 
 class bgzf_ostreambuf : public _ostreambuf
 {
-
 public:
     bgzf_ostreambuf(std::streambuf * _sbuf_p,
                std::size_t = 0, int _level = Z_DEFAULT_COMPRESSION, int = 0) 
@@ -799,8 +833,7 @@ public:
 }; // class bgzf_ostreambuf
 
 template<typename _istreambuf>
-class _istream
-    : public std::istream
+class _istream : public std::istream
 {
 public:
     _istream(std::istream & is, std::size_t _buff_size, bool _auto_detect, int _window_bits)
@@ -819,15 +852,17 @@ public:
     }
 }; // class _istream
 
-class istream : public _istream<istreambuf> {
-    public:
+class istream : public _istream<istreambuf> 
+{
+public:
     istream(std::istream & is,
             std::size_t _buff_size = default_buff_size, bool _auto_detect = true, int _window_bits = 0)
         : _istream(is, _buff_size, _auto_detect, _window_bits) {}
 }; // class istream
 
-class bgzf_istream : public _istream<bgzf_istreambuf> {
-    public:
+class bgzf_istream : public _istream<bgzf_istreambuf> 
+{
+public:
     bgzf_istream(std::istream & is,
             std::size_t = 0, bool _auto_detect = true, int = 0)
         : _istream(is, bgzf_default_buff_size, _auto_detect, 15+16) {}
@@ -848,8 +883,7 @@ class bgzf_istream : public _istream<bgzf_istreambuf> {
 }; // class bgzf_istream
 
 template<typename _ostreambuf>
-class _ostream
-    : public std::ostream
+class _ostream : public std::ostream
 {
 public:
     _ostream(std::ostream & os,
@@ -869,7 +903,8 @@ public:
     }
 }; // class _ostream
 
-class ostream : public _ostream<ostreambuf> {
+class ostream : public _ostream<ostreambuf> 
+{
 public:
     ostream(std::ostream & os,
             std::size_t _buff_size = default_buff_size, int _level = Z_DEFAULT_COMPRESSION, int _window_bits = 0)
@@ -927,8 +962,9 @@ public:
 }; // class ifstream
 
 
-class ifstream : public _ifstream<istreambuf> {
-    public:
+class ifstream : public _ifstream<istreambuf> 
+{
+public:
     explicit ifstream(const std::string filename, std::ios_base::openmode mode = std::ios_base::in, size_t buff_size = default_buff_size)
         : _ifstream(filename, mode, buff_size)
     {
@@ -936,8 +972,9 @@ class ifstream : public _ifstream<istreambuf> {
     }
 };
 
-class bgzf_ifstream : public _ifstream<bgzf_istreambuf> {
-    public:
+class bgzf_ifstream : public _ifstream<bgzf_istreambuf> 
+{
+public:
     explicit bgzf_ifstream(const std::string filename, std::ios_base::openmode mode = std::ios_base::in, size_t = 0)
         : _ifstream(filename, mode, bgzf_default_buff_size)
     {
@@ -990,8 +1027,9 @@ public:
 
 }; // class ofstream
 
-class ofstream : public _ofstream<ostreambuf> {
-    public:
+class ofstream : public _ofstream<ostreambuf> 
+{
+public:
     explicit ofstream(const std::string& filename, std::ios_base::openmode mode = std::ios_base::out,
                       int level = Z_DEFAULT_COMPRESSION, size_t buff_size = default_buff_size)
         : _ofstream(filename, mode, level, buff_size) {
@@ -999,8 +1037,9 @@ class ofstream : public _ofstream<ostreambuf> {
         }
 };
 
-class bgzf_ofstream : public _ofstream<bgzf_ostreambuf> {
-    public:
+class bgzf_ofstream : public _ofstream<bgzf_ostreambuf> 
+{
+public:
         explicit bgzf_ofstream(const std::string& filename, std::ios_base::openmode mode = std::ios_base::out,
                       int level = Z_DEFAULT_COMPRESSION)
         : _ofstream(filename, mode, level, bgzf_default_buff_size) {
