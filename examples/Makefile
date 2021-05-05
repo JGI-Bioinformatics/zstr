@@ -9,7 +9,7 @@ all: test-strict_fstream ztxtpipe zpipe zc
 %: %.cpp
 	g++ -std=c++11 -O0 -g3 -ggdb -fno-eliminate-unused-debug-types -Wall -Wextra -pedantic -I../src -o $@ $^ -lz
 
-test: ztxtpipe zpipe zc
+test: ztxtpipe zpipe zc bgzc
 	diff -q ztxtpipe.cpp <(./ztxtpipe <ztxtpipe.cpp)
 	diff -q ztxtpipe.cpp <(gzip <ztxtpipe.cpp | ./ztxtpipe)
 	diff -q ztxtpipe.cpp <(gzip -9 <ztxtpipe.cpp | ./ztxtpipe)
@@ -39,11 +39,7 @@ test: ztxtpipe zpipe zc
 	diff -q <(cat zc.cpp zc.cpp) <({ ./zc -c zc.cpp; ./zc -c zc.cpp; } | zcat)
 	diff -q <(cat zc.cpp zc.cpp) <({ gzip <zc.cpp; ./zc -c zc.cpp; } | zcat)
 	diff -q <(cat zc.cpp zc.cpp) <({ ./zc -c zc.cpp; gzip <zc.cpp; } | zcat)
-	@echo "all passed"
-
-test-bgzf: ztxtpipe zpipe zc bgzc
-	set -x
-	tar -cvf .tmp ztxtpipe zpipe zc bgzc
+	tar -cf .tmp ztxtpipe zpipe zc bgzc
 	bgzip -f -c .tmp >.tmp.gz
 	gzip -t .tmp.gz
 	diff -q .tmp <(./zc <.tmp.gz)
@@ -57,9 +53,10 @@ test-bgzf: ztxtpipe zpipe zc bgzc
 	gzip -c .tmp > .tmp3.gz
 	gzip -t .tmp3.gz
 	diff -q .tmp <(./zc <.tmp3.gz)
-	diff -q .tmp <(./bgzc <.tmp3.gz)
-	diff -q .tmp <(./bgzc .tmp3.gz)
-	#rm -f .tmp .tmp.gz .tmp2.gz .tmp3.gz
+	diff -q .tmp <(./bgzc <.tmp3.gz) && echo "Expected a BGZF magic header warning."
+	diff -q .tmp <(./bgzc .tmp3.gz) && echo "Expected a BGZF magic header warning."
+	rm -f .tmp*
+	@echo "all passed"
 
 clean:
 	rm -rf test-strict_fstream ztxtpipe zpipe zc bgzc
