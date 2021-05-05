@@ -41,5 +41,25 @@ test: ztxtpipe zpipe zc
 	diff -q <(cat zc.cpp zc.cpp) <({ ./zc -c zc.cpp; gzip <zc.cpp; } | zcat)
 	@echo "all passed"
 
+test-bgzf: ztxtpipe zpipe zc bgzc
+	set -x
+	tar -cvf .tmp ztxtpipe zpipe zc bgzc
+	bgzip -f -c .tmp >.tmp.gz
+	gzip -t .tmp.gz
+	diff -q .tmp <(./zc <.tmp.gz)
+	diff -q .tmp <(./bgzc <.tmp.gz)
+	diff -q .tmp <(./bgzc .tmp.gz)
+	./bgzc -c .tmp > .tmp2.gz
+	gzip -t .tmp2.gz
+	diff -q .tmp <(./zc <.tmp2.gz)
+	diff -q .tmp <(./bgzc <.tmp2.gz)
+	diff -q .tmp <(./bgzc .tmp2.gz)
+	gzip -c .tmp > .tmp3.gz
+	gzip -t .tmp3.gz
+	diff -q .tmp <(./zc <.tmp3.gz)
+	diff -q .tmp <(./bgzc <.tmp3.gz)
+	diff -q .tmp <(./bgzc .tmp3.gz)
+	#rm -f .tmp .tmp.gz .tmp2.gz .tmp3.gz
+
 clean:
-	rm -rf test-strict_fstream ztxtpipe zpipe zc
+	rm -rf test-strict_fstream ztxtpipe zpipe zc bgzc
