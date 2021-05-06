@@ -83,7 +83,7 @@ bool verify_random_access(const std::string &f) {
         if (memcmp(buf, zstr::BGZF_MAGIC_HEADER, zstr::BGZF_BLOCK_HEADER_LENGTH-2) != 0) { is_verified = false; std::cerr << "Block header mismatch at " << raw.tellg() << std::endl; break; }
         auto cmp_len = zstr::packer::unpackInt16((uint8_t*)buf + zstr::BGZF_BLOCK_HEADER_LENGTH - 2) + 1;
         auto seek_pos = cmp_pos + cmp_len - zstr::BGZF_BLOCK_FOOTER_LENGTH;
-        std::cerr << "block scanning Seeking to " << seek_pos << " cmp_len=" << cmp_len << std::endl;
+        //std::cerr << "block scanning Seeking to " << seek_pos << " cmp_len=" << cmp_len << std::endl;
         raw.seekg(seek_pos);
         assert((size_t) raw.tellg() == seek_pos);
         raw.read(buf,zstr::BGZF_BLOCK_FOOTER_LENGTH + zstr::BGZF_BLOCK_HEADER_LENGTH);
@@ -92,12 +92,12 @@ bool verify_random_access(const std::string &f) {
         if (bytes < zstr::BGZF_BLOCK_FOOTER_LENGTH) { is_verified = false; std::cerr << "Did not read full BGZF footer" << std::endl; break; }
         auto crc = zstr::packer::unpackInt32((uint8_t*)buf + zstr::BGZF_BLOCK_FOOTER_LENGTH - 8);
         auto uncmp_len = zstr::packer::unpackInt32((uint8_t*)buf + zstr::BGZF_BLOCK_FOOTER_LENGTH - 4);
-        std::cerr << "at " << cmp_pos << " uncomp=" << uncmp_len  << " crc=" << crc << std::endl;
+        //std::cerr << "at " << cmp_pos << " uncomp=" << uncmp_len  << " crc=" << crc << std::endl;
         cmp_pos += cmp_len;
         uncmp_pos += uncmp_len;
         idx.append_absolute_block(uncmp_pos, cmp_pos);
         idx2.append_incremental_block(uncmp_len, cmp_len);
-        std::cerr << "at " << cmp_pos << " uncomp=" << uncmp_len << std::endl;
+        //std::cerr << "at " << cmp_pos << " uncomp=" << uncmp_len << std::endl;
         if (bytes == zstr::BGZF_BLOCK_FOOTER_LENGTH + zstr::BGZF_BLOCK_HEADER_LENGTH) {
             // shift
             memmove(buf, buf + zstr::BGZF_BLOCK_FOOTER_LENGTH, zstr::BGZF_BLOCK_HEADER_LENGTH);
@@ -124,29 +124,34 @@ bool verify_random_access(const std::string &f) {
     }
 
     std::ostringstream oss;
+
+    if (!zstr::bgzf_ifstream::is_bgzf(f)) {
+        std::cerr << f << " is NOT a BGZF file" << std::endl;
+    }
+
     zstr::bgzf_ifstream in(f);
     assert((size_t)oss.tellp() == 0);
-    std::cerr << "try @0 in.tellg()=" << in.tellg() << " compressed_tellg()=" << in.compressed_tellg() << " uncomp.tellp()=" << oss.tellp()<< std::endl;
+    //std::cerr << "try @0 in.tellg()=" << in.tellg() << " uncomp.tellp()=" << oss.tellp()<< std::endl;
     assert((size_t)in.tellg() == 0);
     cat_stream(in, oss);
-    std::cerr << "in.tellg()=" << in.tellg() << " compressed_tellg()=" << in.compressed_tellg() << " uncomp.tellp()=" << oss.tellp()<< std::endl;
+    //std::cerr << "in.tellg()=" << in.tellg() << " uncomp.tellp()=" << oss.tellp()<< std::endl;
     assert((size_t)oss.tellp() == uncmp_pos);
     assert((size_t)in.tellg() == cmp_pos);
     
     in.seekg(0);
     std::ostringstream().swap(oss);
-    std::cerr << "try @0 again in.tellg()=" << in.tellg() << " compressed_tellg()=" << in.compressed_tellg() << " uncomp.tellp()=" << oss.tellp()<< std::endl;
+    //std::cerr << "try @0 again in.tellg()=" << in.tellg() << " uncomp.tellp()=" << oss.tellp() << std::endl;
     assert((size_t)oss.tellp() == 0);
     assert((size_t)in.tellg() == 0);
     cat_stream(in, oss);
-    std::cerr << "in.tellg()=" << in.tellg() << " compressed_tellg()=" << in.compressed_tellg() << " uncomp.tellp()=" << oss.tellp() << std::endl;
+    //std::cerr << "in.tellg()=" << in.tellg() << " uncomp.tellp()=" << oss.tellp() << std::endl;
     assert((size_t)oss.tellp() == uncmp_pos);
     assert((size_t)in.tellg() == cmp_pos);
     
 
     //in.seekg(0);
     //std::ostringstream().swap(oss);
-    std::cerr << "try partial in.tellg()=" << in.tellg() << " compressed_tellg()=" << in.compressed_tellg() << " uncomp.tellp()=" << oss.tellp()<< std::endl;
+    //std::cerr << "try partial in.tellg()=" << in.tellg() << " uncomp.tellp()=" << oss.tellp()<< std::endl;
 
     // now verify the blocks can be found
     auto last = idx.end();
@@ -155,11 +160,11 @@ bool verify_random_access(const std::string &f) {
         const auto &blk = *iter;
         assert(blk.uaddr <= uncmp_pos);
         // test exact
-        std::cerr << "Looking at blk.uaddr=" << blk.uaddr << " blk.caddr=" << blk.caddr << std::endl;
-        //auto vfp = in.find_next_bgzf_block(blk.caddr);
-        auto vfp = zstr::bgzf_virtual_file_pointer(blk.caddr, 0);
+        //std::cerr << "Looking at blk.uaddr=" << blk.uaddr << " blk.caddr=" << blk.caddr << std::endl;
+        auto vfp = in.find_next_bgzf_block(blk.caddr);
+        //auto vfp = zstr::bgzf_virtual_file_pointer(blk.caddr, 0);
         //assert(vfp == vfp2);
-        std::cerr << "Found vfp=" << vfp.get_file_offset() << " at " << vfp.get_block_offset() << " after pos=" << blk.caddr << std::endl;
+        //std::cerr << "Found vfp=" << vfp.get_file_offset() << " at " << vfp.get_block_offset() << " after pos=" << blk.caddr << std::endl;
         if (vfp.get_file_offset() != blk.caddr) { is_verified = false; std::cerr << "Expected first byte of block did not match!" << std::endl; break; }
         if (vfp.get_block_offset() != 0) { is_verified = false; std::cerr << "Expected first byte of block did not match block offset!" << std::endl; break; }
     
@@ -179,20 +184,18 @@ bool verify_random_access(const std::string &f) {
         //assert((size_t)in.tellg() == vfp.get_file_offset());
         std::ostringstream().swap(oss);
         assert((uint64_t) oss.tellp() == 0);
-        std::cerr << "Seeking to " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
+        //std::cerr << "Seeking to " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
         in.seek_to_bgzf_pointer(vfp);
-        //in.clear();
-        //in.seekg(vfp.get_file_offset());
-        std::cerr << "Checking block " << blk_i << " at cmp_offset " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
+        //std::cerr << "Checking block " << blk_i << " at cmp_offset " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
         cat_stream(in, oss);
-        std::cerr << "in.tellg()=" << in.tellg() << " compressed_tellg()=" << in.compressed_tellg() << " uncomp.tellp()=" << oss.tellp() << std::endl;
+        //std::cerr << "in.tellg()=" << in.tellg() << " uncomp.tellp()=" << oss.tellp() << std::endl;
         if ((uint64_t) oss.tellp() != uncmp_pos - blk.uaddr) { is_verified = false; std::cerr << "Got wrong remainder of uncompressed stream. expected " << uncmp_pos - blk.uaddr << " got " << oss.tellp() << " blk.uaddr=" << blk.uaddr << std::endl; break; }
 
         if (oss.tellp() > 0) {
             vfp = zstr::bgzf_virtual_file_pointer(vfp.get_file_offset(), 1);
-            std::cerr << "Seeking to " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
+            //std::cerr << "Seeking to " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
             in.seek_to_bgzf_pointer(vfp);
-            std::cerr << "Checking block " << blk_i << " at cmp_offset " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
+            //std::cerr << "Checking block " << blk_i << " at cmp_offset " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
             std::ostringstream().swap(oss);
             assert((uint64_t) oss.tellp() == 0);
             cat_stream(in, oss);

@@ -434,40 +434,12 @@ public:
         in_buff_end = in_buff.get();
         setg(out_buff.get(), out_buff.get(), out_buff.get());
     }
-
-/*
-protected:
-    virtual pos_type seekoff(off_type off, std::ios_base::seekdir dir,
-                     std::ios_base::openmode which) override
-    {
-        std::cerr << "seekoff(" << off << ")" << std::endl;
-        if (off != 0 || dir != std::ios_base::cur) {
-            return std::streambuf::seekoff(off, dir, which);
-        }
-
-        if (!zstrm_p) {
-            return 0;
-        }
-
-        return zstrm_p->total_out - in_avail();
-    }
-    virtual pos_type seekpos(pos_type pos,
-                     std::ios_base::openmode which = std::ios_base::in) override
-    {
-        std::cerr << "seekpos(" << pos << ")" << std::endl;
-        return std::streambuf::seekpos(pos, which);
-        
-    }
-    */
     
 public:
     std::streambuf::int_type underflow() override
     {
-        std::cerr << "underflow" << std::endl;
         if (this->gptr() == this->egptr())
         {
-            std::cerr << "underflow2" << std::endl;
-            if (zstrm_p) std::cerr << "zstrm_p:" << (void*) zstrm_p.get() << " avail_in=" << zstrm_p->avail_in << " avail_out=" << zstrm_p->avail_out << std::endl;
             // pointers for free region in output buffer
             char * out_buff_free_start = out_buff.get();
             int tries = 0;
@@ -477,11 +449,6 @@ public:
                     throw std::ios_base::failure("Failed to fill buffer after 1000 tries");
                 }
 
-                if (!zstrm_p) {
-                    in_buff_start = in_buff.get();
-                    in_buff_end = in_buff.get();
-                }
-
                 // read more input if none available
                 if (in_buff_start == in_buff_end)
                 {
@@ -489,7 +456,7 @@ public:
                     in_buff_start = in_buff.get();
                     std::streamsize sz = sbuf_p->sgetn(in_buff.get(), buff_size);
                     in_buff_end = in_buff_start + sz;
-                    std::cerr << "read " << sz << " bytes from raw stream is_bgzf=" << is_bgzf << std::endl;
+                    //std::cerr << "read " << sz << " bytes from raw stream is_bgzf=" << is_bgzf << std::endl;
                     if (in_buff_end == in_buff_start) break; // end of input
                 }
                 // auto detect if the stream contains text or deflate data
@@ -514,7 +481,7 @@ public:
                 if (is_text)
                 {
                     // simply swap in_buff and out_buff, and adjust pointers
-                    std::cerr << "Discovered text" << std::endl;
+                    //std::cerr << "Discovered text" << std::endl;
                     assert(in_buff_start == in_buff.get());
                     std::swap(in_buff, out_buff);
                     out_buff_free_start = in_buff_end;
@@ -529,8 +496,8 @@ public:
                     zstrm_p->avail_in = uint32_t(in_buff_end - in_buff_start);
                     zstrm_p->next_out = reinterpret_cast< decltype(zstrm_p->next_out) >(out_buff_free_start);
                     zstrm_p->avail_out = uint32_t((out_buff.get() + buff_size) - out_buff_free_start);
-                    std::cerr << "Inflating avail_in=" << zstrm_p->avail_in << " to avail_out=" << zstrm_p->avail_out << " buf->in_avail()=" << this->sbuf_p->in_avail() << std::endl;
-                    std::cerr << "First 24 bytes: " << (void*) *((int64_t*) zstrm_p->next_in) << " " << (void*) *((int64_t*) (zstrm_p->next_in+8)) << " " << (void*) *((int64_t*) (zstrm_p->next_in+16)) << std::endl;
+                    //std::cerr << "Inflating avail_in=" << zstrm_p->avail_in << " to avail_out=" << zstrm_p->avail_out << " buf->in_avail()=" << this->sbuf_p->in_avail() << std::endl;
+                    //std::cerr << "First 24 bytes: " << (void*) *((int64_t*) zstrm_p->next_in) << " " << (void*) *((int64_t*) (zstrm_p->next_in+8)) << " " << (void*) *((int64_t*) (zstrm_p->next_in+16)) << std::endl;
                     if (is_bgzf && zstrm_p->total_in == 0 && zstrm_p->avail_in >= BGZF_BLOCK_HEADER_LENGTH-2 && memcmp(zstrm_p->next_in, BGZF_MAGIC_HEADER, BGZF_BLOCK_HEADER_LENGTH - 2) != 0) {
                         std::cerr << "WARNING: Autodetect failed... did not discover the BGZF magic header. Treating this as normal zip file..." << std::endl;
                         is_bgzf = false;
@@ -558,7 +525,7 @@ public:
                         } else {
                             // we consumed all the input data and hit Z_STREAM_END
                             // so stop looping, even if we never fill the output buffer
-                            std::cerr << "input has NO more avail_in=" << zstrm_p->avail_in << " to avail_out=" << zstrm_p->avail_out << " buf->in_avail()=" << this->sbuf_p->in_avail() <<std::endl;
+                            //std::cerr << "input has NO more avail_in=" << zstrm_p->avail_in << " to avail_out=" << zstrm_p->avail_out << " buf->in_avail()=" << this->sbuf_p->in_avail() <<std::endl;
                             // stream ended, deallocate inflator
                             zstrm_p.reset();
                             break;
@@ -566,7 +533,7 @@ public:
                     }
                     if (ret != Z_OK && ret != Z_STREAM_END) throw Exception(zstrm_p.get(), ret);
                     // update in&out pointers following inflate()
-                    std::cerr << "After Inflating avail_in=" << zstrm_p->avail_in << " avail_out=" << zstrm_p->avail_out << std::endl;
+                    //std::cerr << "After Inflating avail_in=" << zstrm_p->avail_in << " avail_out=" << zstrm_p->avail_out << std::endl;
                     in_buff_start = reinterpret_cast< decltype(in_buff_start) >(zstrm_p->next_in);
                     in_buff_end = in_buff_start + zstrm_p->avail_in;
                     out_buff_free_start = reinterpret_cast< decltype(out_buff_free_start) >(zstrm_p->next_out);
@@ -622,52 +589,11 @@ public:
                : _istreambuf(_sbuf_p, bgzf_default_buff_size, true, 15+16, true) {
     }
 
-    void seek_to_bgzf_pointer(bgzf_virtual_file_pointer vfp) {
-        assert(!this->zstrm_p || this->zstrm_p->avail_out == this->buff_size);
-        std::cerr << "seek_to_bgzf_pointer gptr=" << (void*) this->gptr() << " egptr=" << (void*) this->egptr() << std::endl;
-        auto pos = this->sbuf_p->pubseekpos(vfp.get_file_offset(), std::ios_base::in);
-        if (pos != (std::streampos) vfp.get_file_offset()) {
-            throw Exception(this->zstrm_p.get(), Z_ERRNO);
-        }
-        std::cerr << "seek_to_bgzf_pointer gptr=" << (void*) this->gptr() << " egptr=" << (void*) this->egptr() << std::endl;
-        std::cerr << "Seeked in the compressed stream pos=" << pos << std::endl;
-        this->zstrm_p.reset();
-        auto uf = this->underflow();
-        if (uf == traits_type::eof()) {
-            throw Exception(zstrm_p.get(), Z_ERRNO, "Seek attempted past EOF");
-        }
-        
-        auto block_offset = vfp.get_block_offset();
-        if (block_offset) {
-            if (!this->zstrm_p || block_offset > this->zstrm_p->avail_out) {
-                throw Exception(zstrm_p.get(), Z_DATA_ERROR, " block_offset is larger than avail_out");
-            }
-            // start at the block offset
-            this->zstrm_p->next_out += block_offset;
-            this->zstrm_p->avail_out -= block_offset;
-        }
-        std::cerr << "successful underflow in the compressed stream pos=" << pos << " starting at block offset=" << block_offset << " avail_out=" << (this->zstrm_p ? this->zstrm_p->avail_out : -1) << std::endl;
-    }
-
-    bgzf_virtual_file_pointer find_next_bgzf_block(size_t compressed_offset) {
-        std::cerr << "find_next_bgzf_block gptr=" << (void*) this->gptr() << " egptr=" << (void*) this->egptr() << std::endl;
-        auto pos = this->sbuf_p->pubseekpos(compressed_offset, std::ios_base::in);
-        std::cerr << "find_next_bgzf_block gptr=" << (void*) this->gptr() << " egptr=" << (void*) this->egptr() << std::endl;
-        if (pos != (std::streampos) compressed_offset) {
-            throw Exception(this->zstrm_p.get(), Z_ERRNO);
-        }
-        auto offset = this->find_next_bgzf_block2();
-        if (offset >= 0) {
-            return bgzf_virtual_file_pointer(compressed_offset + offset, 0);
-        } else {
-            return bgzf_virtual_file_pointer::get_invalid();
-        }
-    }
-    std::streamsize find_next_bgzf_block2() {
+    std::streamsize find_next_bgzf_block_after_current_pos() {
         // read 2x the max buffer size as a block must be fully contained within that range
         auto test_buf = std::make_unique<char[]>(bgzf_default_buff_size * 2);
         std::streamsize sz = sbuf_p->sgetn(test_buf.get(), bgzf_default_buff_size * 2);
-        std::cerr << "bgzf_istreambuf::find_next_bgzf_block2 sgetn got " << sz << std::endl;
+        //std::cerr << "bgzf_istreambuf::find_next_bgzf_block_after_current_pos sgetn got " << sz << std::endl;
         std::streamsize offset = 0;
         for( ; offset < (std::streamsize) bgzf_default_buff_size + 1; offset++) {
             if (offset > sz - BGZF_BLOCK_HEADER_LENGTH + BGZF_BLOCK_FOOTER_LENGTH) {
@@ -694,7 +620,7 @@ public:
                     this->underflow();
                     // success! cleanup & return
                     // uncompressed output is lost, and one must call seek_to_bgzf_pointer to actually reposition the pointer.
-                    std::cerr << "found header at +" << offset << std::endl;
+                    //std::cerr << "found header at +" << offset << std::endl;
                     return offset;
 
                 } catch(...) {
@@ -705,7 +631,7 @@ public:
         this->reset();
         if (sz < (std::streamsize) bgzf_default_buff_size * 2) {
             // not found but at eof
-            std::cerr << "found EOF at +" << sz << std::endl;
+            //std::cerr << "found EOF at +" << sz << std::endl;
             return sz;
         } else {
             // not found, so the bgzf stream is in error
@@ -908,7 +834,7 @@ public:
         zs->total_out += BGZF_BLOCK_HEADER_LENGTH + BGZF_BLOCK_FOOTER_LENGTH;
         assert(zs->next_out == dst + dlen);
         index.append_incremental_block( slen, dlen );
-        std::cerr << "Block uncomp:" << slen << " comp:" << dlen << std::endl;
+        //std::cerr << "Block uncomp:" << slen << " comp:" << dlen << std::endl;
         
         return Z_STREAM_END;
 
@@ -971,6 +897,11 @@ public:
     {
         delete rdbuf();
     }
+
+    std::streampos uncompressed_tellg()
+    {
+        return ((std::istream*)this)->tellg();
+    }
 }; // class _istream
 
 class istream : public _istream<istreambuf> 
@@ -987,19 +918,6 @@ public:
     bgzf_istream(std::istream & is,
             std::size_t = 0, bool _auto_detect = true, int = 0)
         : _istream(is, bgzf_default_buff_size, _auto_detect, 15+16) {}
-
-    static bool is_bgzf(std::istream &is) {
-        // peeks at the stream, reading the first few bytes for the magic bgzf header
-        char buf[19];
-        if (is.fail() || is.eof()) return false;
-        is.read(buf,16);
-        if (is.fail() || is.eof()) return false;
-        bool ret = memcmp(buf, BGZF_MAGIC_HEADER, 16) == 0;
-        // put back those 16 bytes
-        for (int i = 0; i < 16; i++)
-            is.putback(buf[16-1-i]);
-        return ret;
-    }
 
 }; // class bgzf_istream
 
@@ -1075,20 +993,34 @@ public:
     {
         _fs.close();
     }
+
+    static bool is_bgzf(std::string filename) {
+        // peeks at the stream, reading the first few bytes for the magic bgzf header
+        std::ifstream in(filename);
+        return is_bgzf(in);
+    }
+    static bool is_bgzf(std::istream &is) {
+        char buf[BGZF_BLOCK_HEADER_LENGTH+1];
+        if (is.fail() || is.eof()) return false;
+        is.read(buf,BGZF_BLOCK_HEADER_LENGTH);
+        if (is.gcount() < BGZF_BLOCK_HEADER_LENGTH) return false;
+        if (is.fail() || is.eof()) return false;
+        bool ret = memcmp(buf, BGZF_MAGIC_HEADER, BGZF_BLOCK_HEADER_LENGTH-2) == 0;
+        return ret;
+    }
+
     // Return the position within the compressed file
     std::streampos tellg()
     {
         return _fs.tellg();
     }
-    std::streampos compressed_tellg()
-    {
-        return tellg();
-    }
-    _ifstream & seekg(std::streampos pos)
-    {
+
+    _ifstream &seekg(streampos pos) {
+        //std::cerr << "Calling _ifstream::seekg(" << pos << ")" << std::endl;
         this->clear();
-        _fs.clear();
         _fs.seekg(pos);
+        _istreambuf * bgzf_isb = (_istreambuf *) rdbuf();
+        bgzf_isb->reset();
         return *this;
     }
 }; // class ifstream
@@ -1114,11 +1046,9 @@ public:
     }
 
     void seek_to_bgzf_pointer(bgzf_virtual_file_pointer vfp) {
-        std::cerr << "bgzf_ifstream::seek_to_bgzf_pointer Seeking to " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
-        bgzf_istreambuf * bgzf_isb = (bgzf_istreambuf *) rdbuf();
-        this->clear();
+        //std::cerr << "bgzf_ifstream::seek_to_bgzf_pointer Seeking to " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
         this->seekg(vfp.get_file_offset());
-        bgzf_isb->reset();
+        bgzf_istreambuf * bgzf_isb = (bgzf_istreambuf *) rdbuf();
         bgzf_isb->underflow();
         auto offset = vfp.get_block_offset();
         if (offset > 0) {
@@ -1128,29 +1058,24 @@ public:
                 throw Exception(nullptr, Z_DATA_ERROR, "Could not read to block offset");
             }
         }
-        std::cerr << "seek_to_bgzf_pointer at now" << std::endl;
+        //std::cerr << "seek_to_bgzf_pointer at now" << std::endl;
         //bgzf_isb->seek_to_bgzf_pointer(vfp);
-    }
-
-    bgzf_virtual_file_pointer find_next_bgzf_block2(size_t compressed_offset) {
-        bgzf_istreambuf * bgzf_isb = (bgzf_istreambuf *) rdbuf();
-        return bgzf_isb->find_next_bgzf_block(compressed_offset);
     }
 
     bgzf_virtual_file_pointer find_next_bgzf_block(size_t compressed_offset) {
 
-        std::cerr << "bgzf_ifstream::find_next_bgzf_block(" << compressed_offset << ")" << std::endl;
+        //std::cerr << "bgzf_ifstream::find_next_bgzf_block(" << compressed_offset << ")" << std::endl;
         this->clear();
         this->seekg(compressed_offset);
 
         bgzf_istreambuf * bgzf_isb = (bgzf_istreambuf *) rdbuf();
         
-        auto offset = bgzf_isb->find_next_bgzf_block2();
+        auto offset = bgzf_isb->find_next_bgzf_block_after_current_pos();
         if (offset >= 0) {
-            std::cerr << "Found valid block at " << compressed_offset + offset << std::endl;
+            //std::cerr << "Found valid block at " << compressed_offset + offset << std::endl;
             return bgzf_virtual_file_pointer(compressed_offset + offset, 0);
         } else {
-            std::cerr << "DID NOT FIND valid block after " << compressed_offset << std::endl;
+            //std::cerr << "DID NOT FIND valid block after " << compressed_offset << std::endl;
             return bgzf_virtual_file_pointer::get_invalid();
         }
         
