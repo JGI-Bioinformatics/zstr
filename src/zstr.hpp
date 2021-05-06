@@ -681,6 +681,7 @@ public:
         
         zstrm_p->next_out = reinterpret_cast< decltype(zstrm_p->next_out) >(out_buff.get());
         zstrm_p->avail_out = buff_size;
+        if (write_size > 0) last_sink = write_size;
         return write_size;
     }
 
@@ -724,7 +725,7 @@ public:
         //
         if (!failed) try {
             sync();
-            if (is_bgzf) {
+            if (is_bgzf && last_sink != 28) {
                 // write one last empty block
                 //std::cerr << "Writing last empty block for BGZF" << std::endl;
                 bgzf_deflate(zstrm_p.get());
@@ -849,6 +850,7 @@ protected:
     int level;
     bool failed = false;
     bool is_bgzf; // for bgzf format
+    size_t last_sink = 0;
     bgzf_index index;
 
 }; // class _ostreambuf
@@ -1110,11 +1112,6 @@ public:
     {
         std::ostream::flush();
         _fs.close();
-    }
-    // Return the position within the compressed file
-    std::streampos compressed_tellp()
-    {
-        return _fs.tellp();
     }
 
 }; // class ofstream

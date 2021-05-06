@@ -90,9 +90,8 @@ bool verify_random_access(const std::string &f) {
         bytes = raw.gcount();
         
         if (bytes < zstr::BGZF_BLOCK_FOOTER_LENGTH) { is_verified = false; std::cerr << "Did not read full BGZF footer" << std::endl; break; }
-        auto crc = zstr::packer::unpackInt32((uint8_t*)buf + zstr::BGZF_BLOCK_FOOTER_LENGTH - 8);
         auto uncmp_len = zstr::packer::unpackInt32((uint8_t*)buf + zstr::BGZF_BLOCK_FOOTER_LENGTH - 4);
-        //std::cerr << "at " << cmp_pos << " uncomp=" << uncmp_len  << " crc=" << crc << std::endl;
+        //std::cerr << "at " << cmp_pos << " uncomp=" << uncmp_len << std::endl;
         cmp_pos += cmp_len;
         uncmp_pos += uncmp_len;
         idx.append_absolute_block(uncmp_pos, cmp_pos);

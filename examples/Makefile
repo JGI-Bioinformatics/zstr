@@ -47,6 +47,7 @@ test: ztxtpipe zpipe zc bgzc bgzf_random_access
 	diff -q .tmp <(./bgzc .tmp.gz)
 	./bgzc -c .tmp > .tmp2.gz
 	gzip -t .tmp2.gz
+	diff -q .tmp.gz .tmp2.gz
 	diff -q .tmp <(./zc <.tmp2.gz)
 	diff -q .tmp <(./bgzc <.tmp2.gz)
 	diff -q .tmp <(./bgzc .tmp2.gz)
