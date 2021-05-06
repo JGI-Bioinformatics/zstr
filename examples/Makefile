@@ -9,7 +9,7 @@ all: test-strict_fstream ztxtpipe zpipe zc
 %: %.cpp
 	g++ -std=c++11 -O0 -g3 -ggdb -fno-eliminate-unused-debug-types -Wall -Wextra -pedantic -I../src -o $@ $^ -lz
 
-test: ztxtpipe zpipe zc bgzc
+test: ztxtpipe zpipe zc bgzc bgzf_random_access
 	diff -q ztxtpipe.cpp <(./ztxtpipe <ztxtpipe.cpp)
 	diff -q ztxtpipe.cpp <(gzip <ztxtpipe.cpp | ./ztxtpipe)
 	diff -q ztxtpipe.cpp <(gzip -9 <ztxtpipe.cpp | ./ztxtpipe)
@@ -55,8 +55,11 @@ test: ztxtpipe zpipe zc bgzc
 	diff -q .tmp <(./zc <.tmp3.gz)
 	diff -q .tmp <(./bgzc <.tmp3.gz) && echo "Expected a BGZF magic header warning."
 	diff -q .tmp <(./bgzc .tmp3.gz) && echo "Expected a BGZF magic header warning."
+	./bgzf_random_access .tmp.gz
+	./bgzf_random_access .tmp2.gz
+	./bgzf_random_access .tmp3.gz || echo "Expected that to fail"
 	rm -f .tmp*
 	@echo "all passed"
 
 clean:
-	rm -rf test-strict_fstream ztxtpipe zpipe zc bgzc
+	rm -rf test-strict_fstream ztxtpipe zpipe zc bgzc bgzf_random_access
