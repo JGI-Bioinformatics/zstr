@@ -58,8 +58,10 @@ void decompress_files(const std::vector< std::string >& file_v, const std::strin
 } // decompress_files
 
 bool verify_random_access(const std::string &f) {
+    bool is_bgzf = zstr::bgzf_ifstream::is_bgzf(f);
     // first find all the magic blocks in the file and index it
     std::ifstream raw(f);
+
     zstr::bgzf_index idx, idx2;
     char buf[zstr::BGZF_BLOCK_HEADER_LENGTH + zstr::BGZF_BLOCK_FOOTER_LENGTH + 1];
     bool is_verified = true;
@@ -107,6 +109,7 @@ bool verify_random_access(const std::string &f) {
         }
         if (raw.fail()) { is_verified = false; std::cerr << "Got failure reading BGZF footer" << std::endl; break; }
     }
+    assert(is_verified || !is_bgzf || "Either is verifed or is not a BGZF compatible zip file");
     if (!is_verified) {
         std::cerr << f << " is not a valid BGZF file!" << std::endl;
         return is_verified;
@@ -129,10 +132,14 @@ bool verify_random_access(const std::string &f) {
     }
 
     zstr::bgzf_ifstream in(f);
+    auto test_vfp = in.get_bgzf_virtual_file_pointer();
+    //std::cerr << "Got vfp: " << test_vfp.get_file_offset() << " at " << test_vfp.get_block_offset() << std::endl;
     assert((size_t)oss.tellp() == 0);
     //std::cerr << "try @0 in.tellg()=" << in.tellg() << " uncomp.tellp()=" << oss.tellp()<< std::endl;
     assert((size_t)in.tellg() == 0);
     cat_stream(in, oss);
+    test_vfp = in.get_bgzf_virtual_file_pointer();
+    //std::cerr << "Got vfp: " << test_vfp.get_file_offset() << " at " << test_vfp.get_block_offset() << std::endl;
     //std::cerr << "in.tellg()=" << in.tellg() << " uncomp.tellp()=" << oss.tellp()<< std::endl;
     assert((size_t)oss.tellp() == uncmp_pos);
     assert((size_t)in.tellg() == cmp_pos);
@@ -185,6 +192,9 @@ bool verify_random_access(const std::string &f) {
         assert((uint64_t) oss.tellp() == 0);
         //std::cerr << "Seeking to " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
         in.seek_to_bgzf_pointer(vfp);
+        test_vfp = in.get_bgzf_virtual_file_pointer();
+        //std::cerr << "Got " << (vfp==test_vfp ? "correct" : "INCORRECT") << " vfp: " << test_vfp.get_file_offset() << " at " << test_vfp.get_block_offset() << std::endl;
+        assert(vfp == test_vfp);
         //std::cerr << "Checking block " << blk_i << " at cmp_offset " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
         cat_stream(in, oss);
         //std::cerr << "in.tellg()=" << in.tellg() << " uncomp.tellp()=" << oss.tellp() << std::endl;
@@ -194,6 +204,9 @@ bool verify_random_access(const std::string &f) {
             vfp = zstr::bgzf_virtual_file_pointer(vfp.get_file_offset(), 1);
             //std::cerr << "Seeking to " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
             in.seek_to_bgzf_pointer(vfp);
+            auto test_vfp = in.get_bgzf_virtual_file_pointer();
+            //std::cerr << "Got " << (vfp==test_vfp ? "correct" : "INCORRECT") << " vfp: " << test_vfp.get_file_offset() << " at " << test_vfp.get_block_offset() << std::endl;
+            assert(vfp == test_vfp);
             //std::cerr << "Checking block " << blk_i << " at cmp_offset " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
             std::ostringstream().swap(oss);
             assert((uint64_t) oss.tellp() == 0);

@@ -36,6 +36,40 @@
    THE SOFTWARE.
 */
 
+/*
+  2021 - Rob Egan added support for the BGZF dialect of bzip (aka bgzip).
+  This format is 100% compatible with gzip / zlib, and supports random access.
+  See https://samtools.github.io/hts-specs/SAMv1.pdf SEction 4.1
+  
+  The compression ratio of BGZF is less than gzip because chunks of data are
+  limited to 64KB/
+
+  The following methods in zstr::bgzf_ifstream support random access:
+  
+    void seekg(pos) 
+        sets the position in the *compressed* file (i.e. the actual compressed file)
+
+    streampos tellg()
+        returns the position in the *compressed* file (i.e. the actual compressed file)
+
+    bgzf_virtual_file_pointer get_bgzf_virtual_file_pointer() const
+        returns the virtual file pointer represented by the current postition in the *uncompressed* file
+
+    bgzf_virtual_file_pointer find_next_bgzf_block(size_t compressed_offset)
+        returns the next virtual file pointer that starts a new block in the compressed file at >= compressed_offset
+
+    void seek_to_bgzf_pointer(bgzf_virtual_file_pointer vfp)
+        seeks to the position in the *uncompressed* file represented by the virtual file pointer
+
+    
+    
+
+
+  Additionally multiple output streams can be concatenated into a single file
+
+
+*/
+
 #pragma once
 
 #include <cassert>
@@ -209,6 +243,7 @@ public:
         int ret;
         if (is_input)
         {
+            this->total_in = 0;
             this->avail_in = 0;
             this->next_in = Z_NULL;
             ret = inflateInit2(this, _window_bits ? _window_bits : 15+32);
@@ -433,9 +468,21 @@ public:
         in_buff_start = in_buff.get();
         in_buff_end = in_buff.get();
         setg(out_buff.get(), out_buff.get(), out_buff.get());
+        last_bgzf_total_in = 0;
+        last_bgzf_total_out = 0;
+        total_bgzf_total_in = 0;
+        total_bgzf_total_out = 0;
     }
     
 public:
+    size_t block_offset_tellg() const {
+        return last_bgzf_total_out - (this->egptr() - this->gptr());
+    }
+    void set_compressed_pos(size_t pos) {
+        total_bgzf_total_in = pos;
+        last_bgzf_total_in = 0;
+    }
+
     std::streambuf::int_type underflow() override
     {
         if (this->gptr() == this->egptr())
@@ -502,9 +549,18 @@ public:
                         std::cerr << "WARNING: Autodetect failed... did not discover the BGZF magic header. Treating this as normal zip file..." << std::endl;
                         is_bgzf = false;
                     }
+                    
+                    //std::cerr << "pre-inflate total_in=" << zstrm_p->total_in << " total_out=" << zstrm_p->total_out << " last_bgzf_total_in=" << last_bgzf_total_in << " last_bgzf_total_out=" << last_bgzf_total_out << " total_total_in=" << total_bgzf_total_in << " total_total_out=" << total_bgzf_total_out << " avail_in=" << zstrm_p->avail_in << std::endl;
                     int ret = inflate(zstrm_p.get(), is_bgzf ? Z_SYNC_FLUSH : Z_NO_FLUSH);
                     // process return code
                     if (is_bgzf && ret == Z_STREAM_END ) {
+                        //std::cerr << "inflated total_in=" << zstrm_p->total_in << " total_out=" << zstrm_p->total_out << " last_bgzf_total_in=" << last_bgzf_total_in << " last_bgzf_total_out=" << last_bgzf_total_out << " total_total_in=" << total_bgzf_total_in << " total_total_out=" << " avail_in=" << zstrm_p->avail_in << total_bgzf_total_out<< std::endl;
+                        total_bgzf_total_in += last_bgzf_total_in;
+                        total_bgzf_total_out += last_bgzf_total_out;
+
+                        last_bgzf_total_in = zstrm_p->total_in;
+                        last_bgzf_total_out = zstrm_p->total_out;
+                        
                         // we finished a GZIP member
                         // scratch for peeking to see if the file is over
                         bool has_more = zstrm_p->avail_in > 0;
@@ -530,6 +586,9 @@ public:
                             zstrm_p.reset();
                             break;
                         }
+                    } else if (is_bgzf) {
+                        last_bgzf_total_in += zstrm_p->total_in;
+                        last_bgzf_total_out += zstrm_p->total_out;
                     }
                     if (ret != Z_OK && ret != Z_STREAM_END) throw Exception(zstrm_p.get(), ret);
                     // update in&out pointers following inflate()
@@ -568,6 +627,10 @@ protected:
     bool is_text;
     int window_bits;
     bool is_bgzf; // for bgzf format support
+    size_t last_bgzf_total_in = 0;
+    size_t last_bgzf_total_out = 0;
+    size_t total_bgzf_total_in = 0;
+    size_t total_bgzf_total_out = 0;
 
 }; // class _istreambuf
 
@@ -587,6 +650,20 @@ public:
     bgzf_istreambuf(std::streambuf * _sbuf_p,
                std::size_t = 0, bool = true, int = 0)
                : _istreambuf(_sbuf_p, bgzf_default_buff_size, true, 15+16, true) {
+    }
+
+    bgzf_virtual_file_pointer get_bgzf_virtual_file_pointer() const 
+    {
+        auto remaining_in_buffer = zstrm_p ? (buff_size - zstrm_p->avail_out) : 0;
+        //std::cerr << "bgzf_istreambuf::get_bgzf_virtual_file_pointer remaining=" << remaining_in_buffer << " total_out=" << total_bgzf_total_out << " " << last_bgzf_total_out << " total_in=" << total_bgzf_total_in << " " << last_bgzf_total_in << std::endl;
+
+        //assert(total_bgzf_total_out >= last_bgzf_total_out);
+        assert(last_bgzf_total_out >= remaining_in_buffer);
+        auto offset = block_offset_tellg();
+        //std::cerr << "bgzf_istreambuf::get_bgzf_virtual_file_pointer filepos=" << total_bgzf_total_in << " offset=" << offset << " last_bgzf_total_out=" << last_bgzf_total_out << " avail_out=" << (zstrm_p?zstrm_p->avail_out:0) << std::endl;
+
+        //assert(zstrm_p->total_out - last_bgzf_total_out - remaining_in_buffer < BGZF_BLOCK_SIZE);
+        return bgzf_virtual_file_pointer(total_bgzf_total_in, offset);
     }
 
     std::streamsize find_next_bgzf_block_after_current_pos() {
@@ -900,10 +977,6 @@ public:
         delete rdbuf();
     }
 
-    std::streampos uncompressed_tellg()
-    {
-        return ((std::istream*)this)->tellg();
-    }
 }; // class _istream
 
 class istream : public _istream<istreambuf> 
@@ -1047,11 +1120,20 @@ public:
         exceptions(std::ios_base::badbit);
     }
 
+    bgzf_virtual_file_pointer get_bgzf_virtual_file_pointer() const {
+        bgzf_istreambuf * bgzf_isb = (bgzf_istreambuf *) rdbuf();
+        return bgzf_isb->get_bgzf_virtual_file_pointer();
+    }
+
     void seek_to_bgzf_pointer(bgzf_virtual_file_pointer vfp) {
-        //std::cerr << "bgzf_ifstream::seek_to_bgzf_pointer Seeking to " << vfp.get_file_offset() << " at " << vfp.get_block_offset() << std::endl;
+        //std::cerr << "bgzf_ifstream::seek_to_bgzf_pointer Seeking to " << vfp.get_file_offset() << " at " << vfp.get_block_offset()<< " tellg pointer: " << this->tellg() << std::endl;
         this->seekg(vfp.get_file_offset());
         bgzf_istreambuf * bgzf_isb = (bgzf_istreambuf *) rdbuf();
+        //std::cerr << "tellg: " << this->tellg() << std::endl;
+        assert((size_t)this->tellg() == vfp.get_file_offset());
+        bgzf_isb->set_compressed_pos(this->tellg());
         bgzf_isb->underflow();
+        //std::cerr << "tellg: " << this->tellg() << std::endl;
         auto offset = vfp.get_block_offset();
         if (offset > 0) {
             auto buf = std::make_unique<char[]>(offset+1);
@@ -1059,6 +1141,7 @@ public:
             if (offset != this->gcount()) {
                 throw Exception(nullptr, Z_DATA_ERROR, "Could not read to block offset");
             }
+            //std::cerr << "Read " << offset << " bytes to adjust tellg pointer: " << this->tellg() << std::endl;
         }
         //std::cerr << "seek_to_bgzf_pointer at now" << std::endl;
         //bgzf_isb->seek_to_bgzf_pointer(vfp);
