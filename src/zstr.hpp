@@ -37,11 +37,11 @@
 */
 
 /*
-  2021 - Rob Egan added support for the BGZF dialect of bzip (aka bgzip).
+  2021-05-09 - Rob Egan added support for the BGZF dialect of bzip (aka bgzip).
   This format is 100% compatible with gzip / zlib, and supports random access.
-  See https://samtools.github.io/hts-specs/SAMv1.pdf SEction 4.1
+  See https://samtools.github.io/hts-specs/SAMv1.pdf Section 4.1
   
-  The compression ratio of BGZF is less than gzip because chunks of data are
+  The compression ratio of BGZF is measurably less than gzip because chunks of data are
   limited to 64KB.
   
   Additionally multiple (flushed or closed) bgzf_ofstreams can be concatenated 
@@ -50,24 +50,28 @@
 
   The following methods in zstr::bgzf_ifstream support random access:
   
-    void seekg(pos) 
-        sets the position in the *compressed* file (i.e. the actual compressed file)
-
-    streampos tellg()
-        returns the position in the *compressed* file (i.e. the actual compressed file)
-
     bgzf_virtual_file_pointer get_bgzf_virtual_file_pointer() const
         returns the virtual file pointer represented by the current postition in the *uncompressed* stream
+        This is 8 bytes long and represents the tellg of the compressed stream at a BGZF block plus the block offset
 
     bgzf_virtual_file_pointer find_next_bgzf_block(size_t compressed_offset)
         returns the next virtual file pointer that starts a new block in the compressed file at >= compressed_offset
-        This function does not require the BGZF is indexed as it discovers the next block header by reading up to 2 blocks
-        of the compressed file
+        This function does not require the BGZF to have been indexed as it discovers the next block header 
+        by reading up to 2 blocks of the compressed file
 
     void seek_to_bgzf_pointer(bgzf_virtual_file_pointer vfp)
         seeks to the position in the *uncompressed* stream represented by the virtual file pointer
 
-   Support of the bgzf index file is still experimental.
+
+  For diagnostics and debugging:
+    void seekg(pos) 
+        sets the position in the *compressed* file (i.e. the actual compressed file)
+        This position *MUST* be to a known BGZF block boundary or else the decompression will throw an Exception
+
+    streampos tellg()
+        returns the position in the *compressed* file (i.e. the actual compressed file)
+
+  Support of the bgzf index file is still experimental but may, in the future, support more efficient random access
 
 */
 
