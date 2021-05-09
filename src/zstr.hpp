@@ -42,7 +42,11 @@
   See https://samtools.github.io/hts-specs/SAMv1.pdf SEction 4.1
   
   The compression ratio of BGZF is less than gzip because chunks of data are
-  limited to 64KB/
+  limited to 64KB.
+  
+  Additionally multiple (flushed or closed) bgzf_ofstreams can be concatenated 
+  into a single file without corruption and will uncompress to the identical bytes
+  as the concatenated uncompressed streams.
 
   The following methods in zstr::bgzf_ifstream support random access:
   
@@ -53,20 +57,17 @@
         returns the position in the *compressed* file (i.e. the actual compressed file)
 
     bgzf_virtual_file_pointer get_bgzf_virtual_file_pointer() const
-        returns the virtual file pointer represented by the current postition in the *uncompressed* file
+        returns the virtual file pointer represented by the current postition in the *uncompressed* stream
 
     bgzf_virtual_file_pointer find_next_bgzf_block(size_t compressed_offset)
         returns the next virtual file pointer that starts a new block in the compressed file at >= compressed_offset
+        This function does not require the BGZF is indexed as it discovers the next block header by reading up to 2 blocks
+        of the compressed file
 
     void seek_to_bgzf_pointer(bgzf_virtual_file_pointer vfp)
-        seeks to the position in the *uncompressed* file represented by the virtual file pointer
+        seeks to the position in the *uncompressed* stream represented by the virtual file pointer
 
-    
-    
-
-
-  Additionally multiple output streams can be concatenated into a single file
-
+   Support of the bgzf index file is still experimental.
 
 */
 
