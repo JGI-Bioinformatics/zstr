@@ -963,7 +963,7 @@ class _ifstream : private detail::strict_fstream_holder<strict_fstream::ifstream
  public:
   explicit _ifstream(const std::string filename, std::ios_base::openmode mode = std::ios_base::in,
                      size_t buff_size = default_buff_size)
-      : detail::strict_fstream_holder<strict_fstream::ifstream>(filename, mode)
+      : detail::strict_fstream_holder<strict_fstream::ifstream>(filename, mode | std::ios_base::binary)
       , std::istream(new _istreambuf(_fs.rdbuf(), buff_size)) {
     exceptions(std::ios_base::badbit);
   }
@@ -1013,7 +1013,7 @@ class ifstream : public _ifstream<istreambuf> {
       : _ifstream(filename, mode, buff_size) {
     exceptions(std::ios_base::badbit);
   }
-  explicit ifstream(std::ifstream &&ifs, size_t buff_size = default_buff_size)
+  explicit ifstream(std::ifstream &&ifs, size_t = 0)
       : _ifstream(std::move(ifs)) {
     exceptions(std::ios_base::badbit);
   }
