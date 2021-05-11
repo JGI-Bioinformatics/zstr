@@ -205,7 +205,8 @@ namespace detail {
 class z_stream_wrapper : public z_stream {
  public:
   z_stream_wrapper(bool _is_input, int _level, int _window_bits)
-      : is_input(_is_input) {
+      : z_stream{}
+      , is_input(_is_input) {
     this->zalloc = Z_NULL;
     this->zfree = Z_NULL;
     this->opaque = Z_NULL;
@@ -226,6 +227,12 @@ class z_stream_wrapper : public z_stream {
     } else {
       deflateEnd(this);
     }
+  }
+  std::string to_string() const {
+    std::ostringstream oss;
+    oss << "z_stream_wrapper(" << (void *)this << ", avail_in=" << avail_in << ", avail_out=" << avail_out
+        << ", next_in=" << (void *)next_in << ", next_out=" << (void *)next_out << ")";
+    return oss.str();
   }
 
  private:
@@ -671,17 +678,22 @@ class _ostreambuf : public std::streambuf {
       , level(_level)
       , is_bgzf(_is_bgzf) {
     assert(sbuf_p);
-    // std::cerr << "ostreambuf constuctor buff_size=" << buff_size << " window_bits=" << _window_bits << " is_bgzf=" << _is_bgzf <<
-    // std::endl;
+    // std::cerr << "ostreambuf constuctor buff_size=" << buff_size << " window_bits=" << _window_bits << " is_bgzf=" << _is_bgzf
+    //          << std::endl;
     in_buff = std::make_unique<char[]>(buff_size);
     out_buff = std::make_unique<char[]>(buff_size);
     setp(in_buff.get(), in_buff.get() + (is_bgzf ? BGZF_BLOCK_SIZE : buff_size));
+    // std::cerr << "zstrm_p=" << (void *)zstrm_p.get() << (zstrm_p ? zstrm_p->to_string() : std::string("(nullptr)"))
+    //          << " in_buff=" << (void *)in_buff.get() << " out_buff=" << (void *)out_buff.get() << std::endl;
   }
 
   _ostreambuf(const _ostreambuf &) = delete;
   _ostreambuf &operator=(const _ostreambuf &) = delete;
 
   std::streamsize write_sink() {
+    // std::cerr << "write_sink zstrm_p=" << (void *)zstrm_p.get() << (zstrm_p ? zstrm_p->to_string() : std::string("(nullptr)"))
+    //          << zstrm_p.get() << " out_buff=" << (void *)out_buff.get() << std::endl;
+    assert(out_buff);
     std::streamsize write_size =
         (zstrm_p && zstrm_p->next_out) ? reinterpret_cast<decltype(out_buff.get())>(zstrm_p->next_out) - out_buff.get() : 0;
     if (write_size > 0) {
@@ -693,8 +705,10 @@ class _ostreambuf : public std::streambuf {
         throw Exception(zstrm_p.get(), Z_ERRNO);
       }
     } else {
-      // std::cerr << "Nothing to write zstrm_p=" << zstrm_p.get() << " out_buff=" << (void*) out_buff.get() << " next_out=" <<
-      // (void*) (zstrm_p ? zstrm_p->next_out : 0) << " avail_out=" << (zstrm_p ? buff_size - zstrm_p->avail_out : -1)<< std::endl;
+      // std::cerr << "Nothing to write zstrm_p=" << (void *)zstrm_p.get()
+      //          << (zstrm_p ? zstrm_p->to_string() : std::string("(nullptr)")) << " out_buff=" << (void *)out_buff.get()
+      //          << " next_out=" << (void *)(zstrm_p ? zstrm_p->next_out : 0)
+      //          << " avail_out=" << (zstrm_p ? buff_size - zstrm_p->avail_out : -1) << std::endl;
     }
 
     zstrm_p->next_out = reinterpret_cast<decltype(zstrm_p->next_out)>(out_buff.get());
@@ -705,9 +719,14 @@ class _ostreambuf : public std::streambuf {
 
   int deflate_loop(int flush) {
     while (true) {
+      // std::cerr << "deflate_loop first calling write_sink flush=" << flush << "zstrm_p=" << (void *)zstrm_p.get()
+      //          << (zstrm_p ? zstrm_p->to_string() : std::string("(nullptr)")) << " in_buff=" << (void *)in_buff.get()
+      //          << " out_buff=" << (void *)out_buff.get() << std::endl;
       std::streamsize sz = write_sink();
-      // std::cerr << "Looping flush=" << flush << " with sz=" << sz << " avail_in=" << zstrm_p->avail_in << " flush=" << flush << "
-      // next_out=" << (size_t) (reinterpret_cast< decltype(out_buff.get()) >(zstrm_p->next_out) - out_buff.get()) << std::endl;
+      // std::cerr << "deflate_loop Looping flush=" << flush << " with sz=" << sz << " avail_in=" << zstrm_p->avail_in
+      //          << " flush=" << flush
+      //          << " next_out=" << (size_t)(reinterpret_cast<decltype(out_buff.get())>(zstrm_p->next_out) - out_buff.get())
+      //          << std::endl;
       zstrm_p->next_out = reinterpret_cast<decltype(zstrm_p->next_out)>(out_buff.get());
       zstrm_p->avail_out = uint32_t(buff_size);
       int ret;
@@ -716,11 +735,12 @@ class _ostreambuf : public std::streambuf {
       } else {
         ret = deflate(zstrm_p.get(), flush);
       }
-      // std::cerr << "avail_in=" << zstrm_p->avail_in << " next_out=" << buff_size - zstrm_p->avail_out << std::endl;
+      // std::cerr << "deflate_loop avail_in=" << zstrm_p->avail_in << " next_out=" << buff_size - zstrm_p->avail_out << std::endl;
       if (ret != Z_OK && ret != Z_STREAM_END && ret != Z_BUF_ERROR) {
         failed = true;
         throw Exception(zstrm_p.get(), ret);
       }
+      // std::cerr << "deflate_loop calling write_sink after deflate flush=" << flush << std::endl;
       sz = write_sink();
       if (ret == Z_STREAM_END || ret == Z_BUF_ERROR || sz == 0) {
         break;
@@ -738,6 +758,8 @@ class _ostreambuf : public std::streambuf {
     // close the ofstream with an explicit call to close(), and do not rely
     // on the implicit call in the destructor.
     //
+    // std::cerr << "~_ostreambuf zstrm_p=" << (void *)zstrm_p.get() << (zstrm_p ? zstrm_p->to_string() : std::string("(nullptr)"))
+    //          << " in_buff=" << (void *)in_buff.get() << " out_buff=" << (void *)out_buff.get() << std::endl;
     if (!failed) try {
         sync();
         if (is_bgzf && last_sink != 28) {
@@ -751,7 +773,7 @@ class _ostreambuf : public std::streambuf {
       }
   }
   std::streambuf::int_type overflow(std::streambuf::int_type c = traits_type::eof()) override {
-    // std::cerr << "overflow" << std::endl;
+    // std::cerr << "overflow in_buff=" << (void *)in_buff.get() << " out_buff=" << (void *)out_buff.get() << std::endl;
     zstrm_p->next_in = reinterpret_cast<decltype(zstrm_p->next_in)>(pbase());
     zstrm_p->avail_in = uint32_t(pptr() - pbase());
     while (zstrm_p->avail_in > 0) {
@@ -777,6 +799,7 @@ class _ostreambuf : public std::streambuf {
     // zstrm_p->avail_in = 0;
     if (deflate_loop(Z_FINISH) != 0) return -1;
     deflateReset(zstrm_p.get());
+    // std::cerr << "sync calling write_sink after deflate_loop and reset" << std::endl;
     write_sink();
     return 0;
   }
@@ -801,7 +824,7 @@ class _ostreambuf : public std::streambuf {
 
     uint8_t *dst = reinterpret_cast<decltype(zs->next_out)>(zs->next_out);
     auto orig_avail_out = zs->avail_out;
-    // std::cerr << "orig_avail_out=" << orig_avail_out << std::endl;
+    // std::cerr << "bgzf_deflate orig_avail_out=" << orig_avail_out << std::endl;
     assert(orig_avail_out >= BGZF_MAX_BLOCK_SIZE);
     // offset the actual writing by the header & avail_out by the header & footer lengths
     zs->next_out = dst + BGZF_BLOCK_HEADER_LENGTH;
@@ -872,6 +895,7 @@ class ostreambuf : public _ostreambuf {
              int _window_bits = 0)
       : _ostreambuf(_sbuf_p, _buff_size, _level, _window_bits) {
     assert(!is_bgzf);
+    // std::cerr << "new ostreambuf _level=" << Z_DEFAULT_COMPRESSION << " buf_size=" << _buff_size << std::endl;
   }
 };  // class ostreambuf
 
@@ -880,6 +904,7 @@ class bgzf_ostreambuf : public _ostreambuf {
   bgzf_ostreambuf(std::streambuf *_sbuf_p, std::size_t = 0, int _level = Z_DEFAULT_COMPRESSION, int = 0)
       : _ostreambuf(_sbuf_p, bgzf_default_buff_size, _level, 15 + 16, true) {
     assert(this->is_bgzf);
+    // std::cerr << "new bgzf_ostreambuf _level=" << Z_DEFAULT_COMPRESSION << " buf_size=" << bgzf_default_buff_size << std::endl;
   }
 
   void output_index(std::ostream &os, pos_type uncompressed_offset = 0, pos_type compressed_offset = 0) {
@@ -923,6 +948,8 @@ class _ostream : public std::ostream {
   _ostream(std::ostream &os, std::size_t _buff_size = default_buff_size, int _level = Z_DEFAULT_COMPRESSION, int _window_bits = 0)
       : std::ostream(new _ostreambuf(os.rdbuf(), _buff_size, _level, _window_bits)) {
     exceptions(std::ios_base::badbit);
+    // std::cerr << "New _ostream buff_size=" << _buff_size << " _level=" << _level << " _window_bits=" << _window_bits <<
+    // std::endl;
   }
   explicit _ostream(std::streambuf *sbuf_p)
       : std::ostream(new _ostreambuf(sbuf_p)) {
@@ -934,13 +961,17 @@ class _ostream : public std::ostream {
 class ostream : public _ostream<ostreambuf> {
  public:
   ostream(std::ostream &os, std::size_t _buff_size = default_buff_size, int _level = Z_DEFAULT_COMPRESSION, int _window_bits = 0)
-      : _ostream(os, _buff_size, _level, _window_bits) {}
+      : _ostream(os, _buff_size, _level, _window_bits) {
+    // std::cerr << "New ostream level=" << _level << " buff_size=" << _buff_size << std::endl;
+  }
 };  // class ostream
 
 class bgzf_ostream : public _ostream<bgzf_ostreambuf> {
  public:
   bgzf_ostream(std::ostream &os, std::size_t = 0, int _level = Z_DEFAULT_COMPRESSION, int = 0)
-      : _ostream(os, bgzf_default_buff_size, _level, 15 + 16) {}
+      : _ostream(os, bgzf_default_buff_size, _level, 15 + 16) {
+    // std::cerr << "New bgzf_ostream level=" << _level << " buff_size=" << bgzf_default_buff_size << std::endl;
+  }
 };  // class bgzf_ostream
 
 namespace detail {
@@ -948,7 +979,9 @@ namespace detail {
 template <typename FStream_Type>
 struct strict_fstream_holder {
   strict_fstream_holder(const std::string &filename, std::ios_base::openmode mode = std::ios_base::in)
-      : _fs(filename, mode) {}
+      : _fs(filename, mode) {
+    // std::cerr << "Opened a new strict_fstream_holder on " << filename << std::endl;
+  }
   strict_fstream_holder(FStream_Type &&fs)
       : _fs() {
     _fs.swap(fs);
@@ -1101,6 +1134,7 @@ class _ofstream : private detail::strict_fstream_holder<strict_fstream::ofstream
       : detail::strict_fstream_holder<strict_fstream::ofstream>(filename, mode | std::ios_base::binary)
       , std::ostream(new base_ostreambuf(_fs.rdbuf(), buff_size, level)) {
     exceptions(std::ios_base::badbit);
+    // std::cerr << "Opened " << filename << " as _ofstream level=" << level << " bufsize=" << buff_size << std::endl;
   }
   _ofstream &flush() {
     std::ostream::flush();
@@ -1129,7 +1163,10 @@ class bgzf_ofstream : public _ofstream<bgzf_ostreambuf> {
  public:
   explicit bgzf_ofstream(const std::string &filename, std::ios_base::openmode mode = std::ios_base::out,
                          int level = Z_DEFAULT_COMPRESSION)
-      : _ofstream(filename, mode, level, bgzf_default_buff_size) {}
+      : _ofstream(filename, mode, level, bgzf_default_buff_size) {
+    // std::cerr << "Opened " << filename << " as bgzf_ofstream level=" << level << " bufsize=" << bgzf_default_buff_size <<
+    // std::endl;
+  }
   void output_index(std::ostream &os, pos_type uncompressed_offset = 0, pos_type compressed_offset = 0) {
     bgzf_ostreambuf *bgzf_osbuf = (bgzf_ostreambuf *)this->rdbuf();
     bgzf_osbuf->output_index(os, uncompressed_offset, compressed_offset);
