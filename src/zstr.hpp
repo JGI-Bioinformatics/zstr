@@ -279,6 +279,8 @@ class bgzf_virtual_file_pointer {
   static std::ios::pos_type to_int_id(bgzf_virtual_file_pointer vfp) { return (vfp.physical_pos << 16) | vfp.block_pos; }
   static bgzf_virtual_file_pointer from_int_id(std::ios::pos_type id) { return bgzf_virtual_file_pointer(id >> 16, id & 0xffff); }
 
+  std::ios::pos_type to_int_id() const { return to_int_id(*this); }
+
   static const bgzf_virtual_file_pointer get_invalid() { return bgzf_virtual_file_pointer(0xffffff, (uint16_t)0xff); }
 };
 
@@ -290,6 +292,7 @@ class bgzf_index {
   bgzf_index(bgzf_index &&move) = default;
   bgzf_index &operator=(const bgzf_index &copy) = default;
   bgzf_index &operator=(bgzf_index &&move) = default;
+  using iterator = std::vector<bgzidx1_t>::const_iterator;
 
   void rebaseline(uint64_t uncompressed_offset, uint64_t compressed_offset) {
     assert(is_valid());
@@ -348,13 +351,12 @@ class bgzf_index {
     assert(last.uaddr <= raw_index.back().uaddr);
   }
 
-  typedef std::vector<bgzidx1_t>::const_iterator idx_iter;
   bgzf_virtual_file_pointer find_uncompressed_pointer(uint64_t uncompressed_offset) const {
     if (raw_index.empty()) return bgzf_virtual_file_pointer::get_invalid();
     assert(is_valid());
     bgzidx1_t test{};
     test.uaddr = uncompressed_offset;
-    idx_iter iter = raw_index.begin();
+    iterator iter = raw_index.begin();
     iter = std::lower_bound(raw_index.begin(), raw_index.end(), test, cmp_uncompressed);
     // get the one just before
     if (iter == raw_index.cend()) {
@@ -382,7 +384,7 @@ class bgzf_index {
   // verifies the index is monotonic in both compressed and uncompressed
   bool is_valid() const {
     bool is_monotonic = true;
-    idx_iter iter, last = raw_index.begin();
+    iterator iter, last = raw_index.begin();
     iter = last;
     while (iter != raw_index.end()) {
       if (iter != last) {
@@ -396,32 +398,33 @@ class bgzf_index {
   }
 
   size_t size() const { return raw_index.size(); }
-  idx_iter begin() const { return raw_index.begin(); }
-  idx_iter end() const { return raw_index.end(); }
+  iterator begin() const { return raw_index.begin(); }
+  iterator end() const { return raw_index.end(); }
+  const bgzidx1_t &operator[](size_t idx) const { return raw_index[idx]; }
 
  protected:
   std::vector<bgzidx1_t> raw_index;
 };
 
-class _istreambuf : public std::streambuf {
+class base_istreambuf : public std::streambuf {
  public:
-  _istreambuf(std::streambuf *_sbuf_p, std::size_t _buff_size, bool _auto_detect, int _window_bits, bool _is_bgzf = false)
+  base_istreambuf(std::streambuf *_sbuf_p, std::size_t _buff_size, bool _auto_detect, int _window_bits, bool _is_bgzf = false)
       : sbuf_p(_sbuf_p)
       , zstrm_p(nullptr)
       , buff_size(_buff_size)
       , auto_detect(_auto_detect)
       , auto_detect_run(false)
       , is_text(false)
-      , window_bits(_window_bits)
-      , is_bgzf(_is_bgzf) {
+      , is_bgzf(_is_bgzf)
+      , window_bits(_window_bits) {
     assert(sbuf_p);
     in_buff = std::make_unique<char[]>(buff_size);
     out_buff = std::make_unique<char[]>(buff_size);
     reset();
   }
 
-  _istreambuf(const _istreambuf &) = delete;
-  _istreambuf &operator=(const _istreambuf &) = delete;
+  base_istreambuf(const base_istreambuf &) = delete;
+  base_istreambuf &operator=(const base_istreambuf &) = delete;
 
   void reset() {
     zstrm_p.reset();
@@ -432,6 +435,7 @@ class _istreambuf : public std::streambuf {
     last_bgzf_total_out = 0;
     total_bgzf_total_in = 0;
     total_bgzf_total_out = 0;
+    last_was_partial = false;
   }
 
  public:
@@ -439,6 +443,7 @@ class _istreambuf : public std::streambuf {
   void set_compressed_pos(size_t pos) {
     total_bgzf_total_in = pos;
     last_bgzf_total_in = 0;
+    last_was_partial = true;  // just do not force the header check
   }
 
   std::streambuf::int_type underflow() override {
@@ -457,9 +462,29 @@ class _istreambuf : public std::streambuf {
           in_buff_start = in_buff.get();
           std::streamsize sz = sbuf_p->sgetn(in_buff.get(), buff_size);
           in_buff_end = in_buff_start + sz;
-          // std::cerr << "read " << sz << " bytes from raw stream is_bgzf=" << is_bgzf << std::endl;
+          std::ostringstream oss;
+          oss << "pid=" << getpid() << " read " << sz << " bytes from raw stream is_bgzf=" << is_bgzf << std::endl;
+          std::cerr << oss.str();
           if (in_buff_end == in_buff_start) break;  // end of input
+        } else if (false && in_buff_end - in_buff_start <= BGZF_BLOCK_HEADER_LENGTH + BGZF_BLOCK_HEADER_LENGTH) {
+          // Try to read more bytes into the existing buffer to fill it
+          auto can_read = buff_size - (in_buff_end - in_buff_start);
+          if (can_read < BGZF_BLOCK_HEADER_LENGTH + BGZF_BLOCK_HEADER_LENGTH) {
+            // move some memory around
+            std::ostringstream oss;
+            oss << "pid=" << getpid() << " Needs to move memory around can_read=" << can_read << std::endl;
+            std::cerr << oss.str();
+          }
+          if (can_read > BGZF_MAX_BLOCK_SIZE - BGZF_BLOCK_SIZE) {
+            can_read -= BGZF_BLOCK_HEADER_LENGTH;
+            std::streamsize sz = sbuf_p->sgetn(in_buff_end, can_read);
+            in_buff_end += sz;
+            std::ostringstream oss;
+            oss << "pid=" << getpid() << " read " << sz << " additional bytes from raw stream is_bgzf=" << is_bgzf << std::endl;
+            std::cerr << oss.str();
+          }
         }
+
         // auto detect if the stream contains text or deflate data
         if (auto_detect && !auto_detect_run) {
           auto_detect_run = true;
@@ -496,27 +521,91 @@ class _istreambuf : public std::streambuf {
           // buf->in_avail()=" << this->sbuf_p->in_avail() << std::endl; std::cerr << "First 24 bytes: " << (void*) *((int64_t*)
           // zstrm_p->next_in) << " " << (void*) *((int64_t*) (zstrm_p->next_in+8)) << " " << (void*) *((int64_t*)
           // (zstrm_p->next_in+16)) << std::endl;
-          if (is_bgzf && zstrm_p->total_in == 0 && zstrm_p->avail_in >= BGZF_BLOCK_HEADER_LENGTH - 2 &&
-              memcmp(zstrm_p->next_in, BGZF_MAGIC_HEADER, BGZF_BLOCK_HEADER_LENGTH - 2) != 0) {
-            std::cerr << "WARNING: Autodetect failed... did not discover the BGZF magic header. Treating this as normal zip file..."
-                      << std::endl;
-            is_bgzf = false;
-          }
+          if (is_bgzf) {
+            if (avail_out != bgzf_default_buff_size)
+              throw Exception(zstrm_p.get(), Z_UNKNOWN, "Output buffer is not ready for next BGZF block");
+            if (avail_in < BGZF_BLOCK_HEADER_LENGTH + BGZF_BLOCK_FOOTER_LENGTH)
+              throw Exception(zstrm_p.get(), Z_UNKNOWN, "Input buffer is insufficient to read the next Header and footer");
 
-          // std::cerr << "pre-inflate total_in=" << zstrm_p->total_in << " total_out=" << zstrm_p->total_out << "
-          // last_bgzf_total_in=" << last_bgzf_total_in << " last_bgzf_total_out=" << last_bgzf_total_out << " total_total_in=" <<
-          // total_bgzf_total_in << " total_total_out=" << total_bgzf_total_out << " avail_in=" << zstrm_p->avail_in << std::endl;
-          int ret = inflate(zstrm_p.get(), is_bgzf ? Z_SYNC_FLUSH : Z_NO_FLUSH);
-          // process return code
-          if (is_bgzf && ret == Z_STREAM_END) {
-            // std::cerr << "inflated total_in=" << zstrm_p->total_in << " total_out=" << zstrm_p->total_out << "
+            std::ostringstream oss;
+            oss << "Checking pid=" << getpid() << " header total_bgzf_total_in=" << total_bgzf_total_in
+                << " last_bgzf_total_in=" << last_bgzf_total_in << " avail_in=" << zstrm_p->avail_in
+                << " avail_out=" << zstrm_p->avail_out << " last_was_partial=" << (last_was_partial ? "TRUE" : "FALSE");
+
+            if (zstrm_p->avail_in >= BGZF_BLOCK_HEADER_LENGTH - 2) {
+              bool is_match = memcmp(zstrm_p->next_in, BGZF_MAGIC_HEADER, BGZF_BLOCK_HEADER_LENGTH - 2) == 0;
+              for (int offset = 1; offset < BGZF_BLOCK_HEADER_LENGTH - 6; offset++) {
+                if (memcmp(zstrm_p->next_in, BGZF_MAGIC_HEADER + offset, BGZF_BLOCK_HEADER_LENGTH - 2 - offset) == 0)
+                  oss << " found negative match at " << offset;
+                if (!is_match && memcmp(zstrm_p->next_in, BGZF_MAGIC_HEADER, BGZF_BLOCK_HEADER_LENGTH - 2 - offset) == 0)
+                  oss << " found partial match of " << BGZF_BLOCK_HEADER_LENGTH - 2 - offset;
+              }
+              assert(zstrm_p->avail_in >= BGZF_BLOCK_HEADER_LENGTH);
+              for (int offset = 0; offset < (int)zstrm_p->avail_in - BGZF_BLOCK_HEADER_LENGTH; offset++) {
+                if (memcmp(zstrm_p->next_in + offset, BGZF_MAGIC_HEADER, BGZF_BLOCK_HEADER_LENGTH - 2) == 0)
+                  oss << " found match at " << offset;
+              }
+
+            } else {
+              oss << " -- Insufficient avail_in";
+            }
+            oss << std::endl;
+            std::cerr << oss.str();
+
+            if (!last_was_partial && zstrm_p->total_in == 0 && zstrm_p->avail_in >= BGZF_BLOCK_HEADER_LENGTH - 2 &&
+                memcmp(zstrm_p->next_in, BGZF_MAGIC_HEADER, BGZF_BLOCK_HEADER_LENGTH - 2) != 0) {
+              std::cerr << "WARNING: pid=" << getpid()
+                        << " Autodetect failed... did not discover the BGZF magic header. Treating this as normal zip file..."
+                        << std::endl;
+              throw Exception(zstrm_p.get(), Z_DATA_ERROR, "Did not land on BGZF block header");
+              // is_bgzf = false;
+            }
+            auto dst = zstrm_p->next_out;
+            size_t clen = packer::unpackInt16(zstrm_p->next_in + BGZF_BLOCK_HEADER_LENGTH - 2) + 1;
+            if (clen + 8 < zstrm_p->avail_in)
+              throw Exception(zstrm_p.get(), Z_DATA_ERROR, "Insufficient avail in for compressed block length");
+            auto expected_crc = packer::unpackInt32(zstrm_p->next_out + clen - 8);
+            auto expected_ulen = packer::unpackInt32(zstrm_p->next_out + clen - 4);
+            zstrm_p->next_in += BGZF_BLOCK_HEADER_LENGTH;
+            zstrm_p->avail_in -= BGZF_BLOCK_HEADER_LENGTH;
+
+            // std::cerr << "pre-inflate total_in=" << zstrm_p->total_in << " total_out=" << zstrm_p->total_out << "
             // last_bgzf_total_in=" << last_bgzf_total_in << " last_bgzf_total_out=" << last_bgzf_total_out << " total_total_in=" <<
-            // total_bgzf_total_in << " total_total_out=" << " avail_in=" << zstrm_p->avail_in << total_bgzf_total_out<< std::endl;
+            // total_bgzf_total_in << " total_total_out=" << total_bgzf_total_out << " avail_in=" << zstrm_p->avail_in << std::endl;
+
+            int ret = inflate(zstrm_p.get(), Z_FINISH);
+            // process return code
+            if (ret != Z_STREAM_END) {
+              last_bgzf_total_in += zstrm_p->total_in;
+              last_bgzf_total_out += zstrm_p->total_out;
+              last_was_partial = true;
+              if (ret = inflateEnd(&zs)) != Z_OK) {
+                  oss << "Did not finish inflate and could not call inflateEnd either" << std::endl;
+                }
+              throw Exception(zstrm_p.get(), ret, "Could not inflalate data");
+            } else {
+              // was good
+              if (zstrm_p->avail_in != expected_ulen)
+                throw Exception(zstrm_p.get(), Z_DATA_ERROR, "Got a different amount of uncompressed length");
+              uint32_t crc = crc32(crc32(0L, NULL, 0L), (unsigned char *)dst, dlen);
+              if (crc != expected_crc) throw Exception(zstrm_p.get(), Z_DATA_ERROR, "Checksum failed on uncompressed results");
+
+              if ((ret = inflateEnd(&zs)) != Z_OK) {
+                throw Exception(zstrm_p.get(), ret, "inflateEnd failed");
+              }
+              // check the crc32
+              size_t dlen = bgzf_default_buff_size - zstrm_p->avail_out;
+            }
+            // std::cerr << "inflated total_in=" << zstrm_p->total_in << " total_out=" << zstrm_p->total_out << "
+            // last_bgzf_total_in=" << last_bgzf_total_in << " last_bgzf_total_out=" << last_bgzf_total_out << " total_total_in="
+            // << total_bgzf_total_in << " total_total_out=" << " avail_in=" << zstrm_p->avail_in << total_bgzf_total_out<<
+            // std::endl;
             total_bgzf_total_in += last_bgzf_total_in;
             total_bgzf_total_out += last_bgzf_total_out;
 
             last_bgzf_total_in = zstrm_p->total_in;
             last_bgzf_total_out = zstrm_p->total_out;
+            last_was_partial = false;
 
             // we finished a GZIP member
             // scratch for peeking to see if the file is over
@@ -545,8 +634,6 @@ class _istreambuf : public std::streambuf {
               break;
             }
           } else if (is_bgzf) {
-            last_bgzf_total_in += zstrm_p->total_in;
-            last_bgzf_total_out += zstrm_p->total_out;
           }
           if (ret != Z_OK && ret != Z_STREAM_END) throw Exception(zstrm_p.get(), ret);
           // update in&out pointers following inflate()
@@ -561,47 +648,65 @@ class _istreambuf : public std::streambuf {
             zstrm_p.reset();
           }
         }
-      } while (out_buff_free_start == out_buff.get());
-      // 2 exit conditions:
-      // - end of input: there might or might not be output available
-      // - out_buff_free_start != out_buff: output available
-      this->setg(out_buff.get(), out_buff.get(), out_buff_free_start);
+        else {
+          int ret = inflate(zstrm_p.get(), is_bgzf ? Z_FINISH : Z_NO_FLUSH);
+          if (ret != Z_OK && ret != Z_STREAM_END) throw Exception(zstrm_p.get(), ret);
+          // update in&out pointers following inflate()
+          // std::cerr << "After Inflating avail_in=" << zstrm_p->avail_in << " avail_out=" << zstrm_p->avail_out << std::endl;
+          in_buff_start = reinterpret_cast<decltype(in_buff_start)>(zstrm_p->next_in);
+          in_buff_end = in_buff_start + zstrm_p->avail_in;
+          out_buff_free_start = reinterpret_cast<decltype(out_buff_free_start)>(zstrm_p->next_out);
+          assert(out_buff_free_start + zstrm_p->avail_out == out_buff.get() + buff_size);
+
+          if (!is_bgzf && ret == Z_STREAM_END) {
+            // if stream ended, deallocate inflator
+            zstrm_p.reset();
+          }
+        }
+      }
     }
-    return this->gptr() == this->egptr() ? traits_type::eof() : traits_type::to_int_type(*this->gptr());
+    while (out_buff_free_start == out_buff.get())
+      ;
+    // 2 exit conditions:
+    // - end of input: there might or might not be output available
+    // - out_buff_free_start != out_buff: output available
+    this->setg(out_buff.get(), out_buff.get(), out_buff_free_start);
   }
+  return this->gptr() == this->egptr() ? traits_type::eof() : traits_type::to_int_type(*this->gptr());
+}
 
- protected:
-  std::streambuf *sbuf_p;
-  std::unique_ptr<char[]> in_buff;
-  char *in_buff_start;
-  char *in_buff_end;
-  std::unique_ptr<char[]> out_buff;
-  std::unique_ptr<detail::z_stream_wrapper> zstrm_p;
-  std::size_t buff_size;
-  bool auto_detect;
-  bool auto_detect_run;
-  bool is_text;
-  int window_bits;
-  bool is_bgzf;  // for bgzf format support
-  size_t last_bgzf_total_in = 0;
-  size_t last_bgzf_total_out = 0;
-  size_t total_bgzf_total_in = 0;
-  size_t total_bgzf_total_out = 0;
+protected : std::streambuf *sbuf_p;
+std::unique_ptr<char[]> in_buff;
+char *in_buff_start;
+char *in_buff_end;
+std::unique_ptr<char[]> out_buff;
+std::unique_ptr<detail::z_stream_wrapper> zstrm_p;
+std::size_t buff_size;
+bool auto_detect;
+bool auto_detect_run;
+bool is_text;
+bool last_was_partial = false;
+bool is_bgzf;
+int window_bits;
+size_t last_bgzf_total_in = 0;
+size_t last_bgzf_total_out = 0;
+size_t total_bgzf_total_in = 0;
+size_t total_bgzf_total_out = 0;
 
-};  // class _istreambuf
+};  // namespace zstr
 
-class istreambuf : public _istreambuf {
+class istreambuf : public base_istreambuf {
  public:
-  istreambuf(std::streambuf *_sbuf_p, std::size_t _buff_size = default_buff_size, bool _auto_detect = true, int _window_bits = 0)
-      : _istreambuf(_sbuf_p, _buff_size, _auto_detect, _window_bits) {}
+  istreambuf(std::streambuf *_sbuf_p, std::size_t _buff_size = default_buff_size, bool _auto_detect = true,
+             int _window_bits = 15 + 32)
+      : base_istreambuf(_sbuf_p, _buff_size, _auto_detect, _window_bits, false) {}
 };  // class istreambuf
 
-class bgzf_istreambuf : public _istreambuf {
+class bgzf_istreambuf : public base_istreambuf {
  public:
   // use the buff size and flags for bgzf support
   bgzf_istreambuf(std::streambuf *_sbuf_p, std::size_t = 0, bool = true, int = 0)
-      : _istreambuf(_sbuf_p, bgzf_default_buff_size, true, 15 + 16, true) {}
-
+      : base_istreambuf(_sbuf_p, bgzf_default_buff_size, true, -15, true) {}
   bgzf_virtual_file_pointer get_bgzf_virtual_file_pointer() const {
     auto remaining_in_buffer = zstrm_p ? (buff_size - zstrm_p->avail_out) : 0;
     // std::cerr << "bgzf_istreambuf::get_bgzf_virtual_file_pointer remaining=" << remaining_in_buffer << " total_out=" <<
@@ -669,9 +774,9 @@ class bgzf_istreambuf : public _istreambuf {
 
 };  // bgzf_istreambuf
 
-class _ostreambuf : public std::streambuf {
+class base_ostreambuf : public std::streambuf {
  public:
-  _ostreambuf(std::streambuf *_sbuf_p, std::size_t _buff_size, int _level, int _window_bits, bool _is_bgzf = false)
+  base_ostreambuf(std::streambuf *_sbuf_p, std::size_t _buff_size, int _level, int _window_bits, bool _is_bgzf = false)
       : sbuf_p(_sbuf_p)
       , zstrm_p(std::make_unique<detail::z_stream_wrapper>(false, _level, _window_bits))
       , buff_size(_buff_size)
@@ -687,8 +792,8 @@ class _ostreambuf : public std::streambuf {
     //          << " in_buff=" << (void *)in_buff.get() << " out_buff=" << (void *)out_buff.get() << std::endl;
   }
 
-  _ostreambuf(const _ostreambuf &) = delete;
-  _ostreambuf &operator=(const _ostreambuf &) = delete;
+  base_ostreambuf(const base_ostreambuf &) = delete;
+  base_ostreambuf &operator=(const base_ostreambuf &) = delete;
 
   std::streamsize write_sink() {
     // std::cerr << "write_sink zstrm_p=" << (void *)zstrm_p.get() << (zstrm_p ? zstrm_p->to_string() : std::string("(nullptr)"))
@@ -749,7 +854,7 @@ class _ostreambuf : public std::streambuf {
     return 0;
   }
 
-  virtual ~_ostreambuf() {
+  virtual ~base_ostreambuf() {
     // flush the zlib stream
     //
     // NOTE: Errors here (sync() return value not 0) are ignored, because we
@@ -758,7 +863,8 @@ class _ostreambuf : public std::streambuf {
     // close the ofstream with an explicit call to close(), and do not rely
     // on the implicit call in the destructor.
     //
-    // std::cerr << "~_ostreambuf zstrm_p=" << (void *)zstrm_p.get() << (zstrm_p ? zstrm_p->to_string() : std::string("(nullptr)"))
+    // std::cerr << "~base_ostreambuf zstrm_p=" << (void *)zstrm_p.get() << (zstrm_p ? zstrm_p->to_string() :
+    // std::string("(nullptr)"))
     //          << " in_buff=" << (void *)in_buff.get() << " out_buff=" << (void *)out_buff.get() << std::endl;
     if (!failed) try {
         sync();
@@ -887,22 +993,22 @@ class _ostreambuf : public std::streambuf {
   size_t last_sink = 0;
   bgzf_index index;
 
-};  // class _ostreambuf
+};  // class base_ostreambuf
 
-class ostreambuf : public _ostreambuf {
+class ostreambuf : public base_ostreambuf {
  public:
   ostreambuf(std::streambuf *_sbuf_p, std::size_t _buff_size = default_buff_size, int _level = Z_DEFAULT_COMPRESSION,
              int _window_bits = 0)
-      : _ostreambuf(_sbuf_p, _buff_size, _level, _window_bits) {
+      : base_ostreambuf(_sbuf_p, _buff_size, _level, _window_bits) {
     assert(!is_bgzf);
     // std::cerr << "new ostreambuf _level=" << Z_DEFAULT_COMPRESSION << " buf_size=" << _buff_size << std::endl;
   }
 };  // class ostreambuf
 
-class bgzf_ostreambuf : public _ostreambuf {
+class bgzf_ostreambuf : public base_ostreambuf {
  public:
   bgzf_ostreambuf(std::streambuf *_sbuf_p, std::size_t = 0, int _level = Z_DEFAULT_COMPRESSION, int = 0)
-      : _ostreambuf(_sbuf_p, bgzf_default_buff_size, _level, 15 + 16, true) {
+      : base_ostreambuf(_sbuf_p, bgzf_default_buff_size, _level, 15 + 16, true) {
     assert(this->is_bgzf);
     // std::cerr << "new bgzf_ostreambuf _level=" << Z_DEFAULT_COMPRESSION << " buf_size=" << bgzf_default_buff_size << std::endl;
   }
@@ -927,7 +1033,7 @@ class _istream : public std::istream {
   }
   virtual ~_istream() { delete rdbuf(); }
 
-};  // class _istream
+};  // template class _istream
 
 class istream : public _istream<istreambuf> {
  public:
@@ -956,7 +1062,7 @@ class _ostream : public std::ostream {
     exceptions(std::ios_base::badbit);
   }
   virtual ~_ostream() { delete rdbuf(); }
-};  // class _ostream
+};  // template class _ostream
 
 class ostream : public _ostream<ostreambuf> {
  public:
@@ -982,40 +1088,68 @@ struct strict_fstream_holder {
       : _fs(filename, mode) {
     // std::cerr << "Opened a new strict_fstream_holder on " << filename << std::endl;
   }
+  strict_fstream_holder(strict_fstream_holder &&fsh) { _fs.swap(fsh._fs); }
   strict_fstream_holder(FStream_Type &&fs)
       : _fs() {
     _fs.swap(fs);
   }
+  virtual ~strict_fstream_holder() { close(); }
+  void close() {
+    if (_fs.is_open()) _fs.close();
+  }
+  void seekg(std::streampos pos) { _fs.seekg(pos); }
+  std::streampos tellg() { return _fs.tellg(); }
   FStream_Type _fs;
-};  // class strict_fstream_holder
+};  // template class strict_fstream_holder
 
 }  // namespace detail
 
-template <typename _istreambuf>
-class _ifstream : private detail::strict_fstream_holder<strict_fstream::ifstream>, public std::istream {
+class base_ifstream : private detail::strict_fstream_holder<strict_fstream::ifstream>, public std::istream {
  public:
-  explicit _ifstream(const std::string filename, std::ios_base::openmode mode = std::ios_base::in,
-                     size_t buff_size = default_buff_size)
-      : detail::strict_fstream_holder<strict_fstream::ifstream>(filename, mode | std::ios_base::binary)
-      , std::istream(new _istreambuf(_fs.rdbuf(), buff_size)) {
+  using Base = detail::strict_fstream_holder<strict_fstream::ifstream>;
+
+  explicit base_ifstream(const std::string filename, std::ios_base::openmode mode = std::ios_base::in,
+                         size_t buff_size = default_buff_size, bool is_bgzf = false)
+      : Base(filename, mode)
+      , std::istream((is_bgzf ? (base_istreambuf *)new bgzf_istreambuf(_fs.rdbuf(), bgzf_default_buff_size) :
+                                (base_istreambuf *)new istreambuf(_fs.rdbuf(), buff_size))) {
     exceptions(std::ios_base::badbit);
   }
-  explicit _ifstream(std::ifstream &&ifs, size_t buff_size = default_buff_size)
-      : detail::strict_fstream_holder<strict_fstream::ifstream>(std::move(ifs))
-      , std::istream(new _istreambuf(_fs.rdbuf(), buff_size)) {
+
+  explicit base_ifstream(std::ifstream &&ifs, size_t buff_size = default_buff_size, bool is_bgzf = false)
+      : Base(std::move(ifs))
+      , std::istream((is_bgzf ? (base_istreambuf *)new bgzf_istreambuf(_fs.rdbuf(), bgzf_default_buff_size) :
+                                (base_istreambuf *)new istreambuf(_fs.rdbuf(), buff_size))) {
     exceptions(std::ios_base::badbit);
   }
-  virtual ~_ifstream() {
-    if (_fs.is_open()) close();
+
+  virtual ~base_ifstream() {
+    close();
     if (rdbuf()) delete rdbuf();
   }
-  virtual void close() { _fs.close(); }
+  virtual void close() { ((Base *)this)->close(); }
+
+  // Return the position within the compressed file
+  std::streampos compressed_tellg() { return ((Base *)this)->tellg(); }
+
+  void compressed_seekg(std::streampos pos) {
+    // std::cerr << "Calling base_ifstream::seekg(" << pos << ")" << std::endl;
+    this->clear();
+    ((Base *)this)->seekg(pos);
+    base_istreambuf *isb = dynamic_cast<base_istreambuf *>(rdbuf());
+    isb->reset();
+  }
+
+  // sets and returns just the underlying file (and hope it is actually uncompressed)
+  virtual std::streampos tellg() { return compressed_tellg(); }
+  virtual void seekg(std::streampos pos) { compressed_seekg(pos); }
 
   static bool is_bgzf(std::string filename) {
     // peeks at the stream, reading the first few bytes for the magic bgzf header
     std::ifstream in(filename);
     return is_bgzf(in);
   }
+
   static bool is_bgzf(std::istream &is) {
     char buf[BGZF_BLOCK_HEADER_LENGTH + 1];
     if (is.fail() || is.eof()) return false;
@@ -1025,64 +1159,46 @@ class _ifstream : private detail::strict_fstream_holder<strict_fstream::ifstream
     bool ret = memcmp(buf, BGZF_MAGIC_HEADER, BGZF_BLOCK_HEADER_LENGTH - 2) == 0;
     return ret;
   }
+};
 
-  // Return the position within the compressed file
-  std::streampos tellg() { return _fs.tellg(); }
-
-  _ifstream &seekg(streampos pos) {
-    // std::cerr << "Calling _ifstream::seekg(" << pos << ")" << std::endl;
-    this->clear();
-    _fs.seekg(pos);
-    _istreambuf *bgzf_isb = (_istreambuf *)rdbuf();
-    bgzf_isb->reset();
-    return *this;
-  }
-};  // class ifstream
-
-class ifstream : public _ifstream<istreambuf> {
+class ifstream : public base_ifstream {
  public:
   explicit ifstream(const std::string filename, std::ios_base::openmode mode = std::ios_base::in,
                     size_t buff_size = default_buff_size)
-      : _ifstream(filename, mode, buff_size) {
-    exceptions(std::ios_base::badbit);
-  }
-  explicit ifstream(std::ifstream &&ifs, size_t = 0)
-      : _ifstream(std::move(ifs)) {
-    exceptions(std::ios_base::badbit);
-  }
-};
+      : base_ifstream(filename, mode, buff_size, false) {}
+  explicit ifstream(std::ifstream &&ifs, size_t buff_size = default_buff_size)
+      : base_ifstream(std::move(ifs), buff_size, false) {}
 
-class bgzf_ifstream : public _ifstream<bgzf_istreambuf> {
+};  // class ifstream
+
+class bgzf_ifstream : public base_ifstream {
  public:
   explicit bgzf_ifstream(const std::string filename, std::ios_base::openmode mode = std::ios_base::in, size_t = 0)
-      : _ifstream(filename, mode, bgzf_default_buff_size) {
-    exceptions(std::ios_base::badbit);
-  }
+      : base_ifstream(filename, mode, bgzf_default_buff_size, true) {}
+
   explicit bgzf_ifstream(std::ifstream &&ifs, size_t = 0)
-      : _ifstream(std::move(ifs), bgzf_default_buff_size) {
-    exceptions(std::ios_base::badbit);
-  }
+      : base_ifstream(std::move(ifs), bgzf_default_buff_size, true) {}
 
   bgzf_virtual_file_pointer get_bgzf_virtual_file_pointer() const {
-    bgzf_istreambuf *bgzf_isb = (bgzf_istreambuf *)rdbuf();
+    bgzf_istreambuf *bgzf_isb = dynamic_cast<bgzf_istreambuf *>(((std::istream *)this)->rdbuf());
     return bgzf_isb->get_bgzf_virtual_file_pointer();
   }
 
   void seek_to_bgzf_pointer(bgzf_virtual_file_pointer vfp) {
     // std::cerr << "bgzf_ifstream::seek_to_bgzf_pointer Seeking to " << vfp.get_file_offset() << " at " << vfp.get_block_offset()<<
     // " tellg pointer: " << this->tellg() << std::endl;
-    this->seekg(vfp.get_file_offset());
-    bgzf_istreambuf *bgzf_isb = (bgzf_istreambuf *)rdbuf();
-    // std::cerr << "tellg: " << this->tellg() << std::endl;
-    assert((size_t)this->tellg() == vfp.get_file_offset());
-    bgzf_isb->set_compressed_pos(this->tellg());
+    compressed_seekg(vfp.get_file_offset());
+    bgzf_istreambuf *bgzf_isb = dynamic_cast<bgzf_istreambuf *>(((std::istream *)this)->rdbuf());
+
+    assert((size_t)compressed_tellg() == vfp.get_file_offset());
+    bgzf_isb->set_compressed_pos(compressed_tellg());
     bgzf_isb->underflow();
-    // std::cerr << "tellg: " << this->tellg() << std::endl;
+
     auto offset = vfp.get_block_offset();
     if (offset > 0) {
       auto buf = std::make_unique<char[]>(offset + 1);
-      this->read(buf.get(), offset);
-      if (offset != this->gcount()) {
+      ((std::istream *)this)->read(buf.get(), offset);
+      if (offset != ((std::istream *)this)->gcount()) {
         throw Exception(nullptr, Z_DATA_ERROR, "Could not read to block offset");
       }
       // std::cerr << "Read " << offset << " bytes to adjust tellg pointer: " << this->tellg() << std::endl;
@@ -1093,10 +1209,9 @@ class bgzf_ifstream : public _ifstream<bgzf_istreambuf> {
 
   bgzf_virtual_file_pointer find_next_bgzf_block(size_t compressed_offset) {
     // std::cerr << "bgzf_ifstream::find_next_bgzf_block(" << compressed_offset << ")" << std::endl;
-    this->clear();
-    this->seekg(compressed_offset);
+    compressed_seekg(compressed_offset);
 
-    bgzf_istreambuf *bgzf_isb = (bgzf_istreambuf *)rdbuf();
+    bgzf_istreambuf *bgzf_isb = dynamic_cast<bgzf_istreambuf *>(((std::istream *)this)->rdbuf());
 
     auto offset = bgzf_isb->find_next_bgzf_block_after_current_pos();
     if (offset >= 0) {
@@ -1107,41 +1222,28 @@ class bgzf_ifstream : public _ifstream<bgzf_istreambuf> {
       return bgzf_virtual_file_pointer::get_invalid();
     }
   }
-};
 
-// helper methods for normal gzip or BGZF compatible open
+  // sets and returns the position within the uncompressed stream
+  virtual std::streampos tellg() { return get_bgzf_virtual_file_pointer().to_int_id(); }
+  virtual void seekg(std::streampos pos) { seek_to_bgzf_pointer(bgzf_virtual_file_pointer::from_int_id(pos)); }
+};  // class bgzf_ifstream
 
-inline std::unique_ptr<std::ifstream> open_any(const std::string filename, std::ios_base::openmode mode = std::ios_base::in,
-                                               size_t = 0) {
-  // open the raw ifstream and take a peak at the header
-  std::ifstream ifs(filename, mode);
-  bool is_bgzf = bgzf_ifstream::is_bgzf(ifs);
-  ifs.seekg(0);
-  if (is_bgzf) {
-    return std::make_unique<std::ifstream>(std::move(ifs));
-  } else {
-    return std::make_unique<std::ifstream>(std::move(ifs));
-  }
-}
-
-inline bool is_bgzf(std::ifstream *in) { return in && dynamic_cast<zstr::bgzf_ifstream *>(in); }
-
-template <typename base_ostreambuf>
-class _ofstream : private detail::strict_fstream_holder<strict_fstream::ofstream>, public std::ostream {
+class base_ofstream : private detail::strict_fstream_holder<strict_fstream::ofstream>, public std::ostream {
  public:
-  explicit _ofstream(const std::string &filename, std::ios_base::openmode mode = std::ios_base::out,
-                     int level = Z_DEFAULT_COMPRESSION, size_t buff_size = default_buff_size)
+  explicit base_ofstream(const std::string &filename, std::ios_base::openmode mode = std::ios_base::out,
+                         int level = Z_DEFAULT_COMPRESSION, size_t buff_size = default_buff_size, bool is_bgzf = false)
       : detail::strict_fstream_holder<strict_fstream::ofstream>(filename, mode | std::ios_base::binary)
-      , std::ostream(new base_ostreambuf(_fs.rdbuf(), buff_size, level)) {
+      , std::ostream(is_bgzf ? (base_ostreambuf *)new bgzf_ostreambuf(_fs.rdbuf(), bgzf_default_buff_size, level) :
+                               (base_ostreambuf *)new ostreambuf(_fs.rdbuf(), buff_size, level)) {
     exceptions(std::ios_base::badbit);
-    // std::cerr << "Opened " << filename << " as _ofstream level=" << level << " bufsize=" << buff_size << std::endl;
+    // std::cerr << "Opened " << filename << " as base_ofstream level=" << level << " bufsize=" << buff_size << std::endl;
   }
-  _ofstream &flush() {
+  base_ofstream &flush() {
     std::ostream::flush();
     _fs.flush();
     return *this;
   }
-  virtual ~_ofstream() {
+  virtual ~base_ofstream() {
     if (_fs.is_open()) close();
     if (rdbuf()) delete rdbuf();
   }
@@ -1150,27 +1252,45 @@ class _ofstream : private detail::strict_fstream_holder<strict_fstream::ofstream
     _fs.close();
   }
 
-};  // class ofstream
+};  // class base_ofstream
 
-class ofstream : public _ofstream<ostreambuf> {
+class ofstream : public base_ofstream {
  public:
   explicit ofstream(const std::string &filename, std::ios_base::openmode mode = std::ios_base::out,
                     int level = Z_DEFAULT_COMPRESSION, size_t buff_size = default_buff_size)
-      : _ofstream(filename, mode, level, buff_size) {}
-};
+      : base_ofstream(filename, mode, level, buff_size, false) {}
+};  // class ofstream
 
-class bgzf_ofstream : public _ofstream<bgzf_ostreambuf> {
+class bgzf_ofstream : public base_ofstream {
  public:
   explicit bgzf_ofstream(const std::string &filename, std::ios_base::openmode mode = std::ios_base::out,
                          int level = Z_DEFAULT_COMPRESSION)
-      : _ofstream(filename, mode, level, bgzf_default_buff_size) {
-    // std::cerr << "Opened " << filename << " as bgzf_ofstream level=" << level << " bufsize=" << bgzf_default_buff_size <<
-    // std::endl;
-  }
+      : base_ofstream(filename, mode, level, bgzf_default_buff_size, true) {}
+
   void output_index(std::ostream &os, pos_type uncompressed_offset = 0, pos_type compressed_offset = 0) {
     bgzf_ostreambuf *bgzf_osbuf = (bgzf_ostreambuf *)this->rdbuf();
     bgzf_osbuf->output_index(os, uncompressed_offset, compressed_offset);
   }
-};
+};  // class bgzf_ofstream
+
+// helper methods for normal gzip or BGZF compatible open
+
+inline std::unique_ptr<zstr::base_ifstream> open_any(const std::string filename, std::ios_base::openmode mode = std::ios_base::in,
+                                                     size_t = 0) {
+  // open the raw ifstream and take a peak at the header
+  std::ifstream ifs(filename, mode);
+  bool is_bgzf = bgzf_ifstream::is_bgzf(ifs);
+  ifs.seekg(0);
+
+  zstr::base_ifstream *ptr;
+  if (is_bgzf) {
+    ptr = new bgzf_ifstream(std::move(ifs));
+  } else {
+    ptr = new ifstream(std::move(ifs));
+  }
+  return std::unique_ptr<zstr::base_ifstream>(ptr);
+}
+
+inline bool is_bgzf(zstr::base_ifstream *in) { return in && dynamic_cast<zstr::bgzf_ifstream *>(in); }
 
 }  // namespace zstr
