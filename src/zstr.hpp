@@ -522,9 +522,9 @@ class base_istreambuf : public std::streambuf {
           // zstrm_p->next_in) << " " << (void*) *((int64_t*) (zstrm_p->next_in+8)) << " " << (void*) *((int64_t*)
           // (zstrm_p->next_in+16)) << std::endl;
           if (is_bgzf) {
-            if (avail_out != bgzf_default_buff_size)
+            if (zstrm_p->avail_out != bgzf_default_buff_size)
               throw Exception(zstrm_p.get(), Z_UNKNOWN, "Output buffer is not ready for next BGZF block");
-            if (avail_in < BGZF_BLOCK_HEADER_LENGTH + BGZF_BLOCK_FOOTER_LENGTH)
+            if (zstrm_p->avail_in < BGZF_BLOCK_HEADER_LENGTH + BGZF_BLOCK_FOOTER_LENGTH)
               throw Exception(zstrm_p.get(), Z_UNKNOWN, "Input buffer is insufficient to read the next Header and footer");
 
             std::ostringstream oss;
@@ -579,22 +579,23 @@ class base_istreambuf : public std::streambuf {
               last_bgzf_total_in += zstrm_p->total_in;
               last_bgzf_total_out += zstrm_p->total_out;
               last_was_partial = true;
-              if (ret = inflateEnd(&zs)) != Z_OK) {
-                  oss << "Did not finish inflate and could not call inflateEnd either" << std::endl;
-                }
+              if ((ret = inflateEnd(zstrm_p.get())) != Z_OK) {
+                oss << "Did not finish inflate and could not call inflateEnd either" << std::endl;
+              }
               throw Exception(zstrm_p.get(), ret, "Could not inflalate data");
             } else {
               // was good
               if (zstrm_p->avail_in != expected_ulen)
                 throw Exception(zstrm_p.get(), Z_DATA_ERROR, "Got a different amount of uncompressed length");
+
+              // check the crc32
+              size_t dlen = bgzf_default_buff_size - zstrm_p->avail_out;
               uint32_t crc = crc32(crc32(0L, NULL, 0L), (unsigned char *)dst, dlen);
               if (crc != expected_crc) throw Exception(zstrm_p.get(), Z_DATA_ERROR, "Checksum failed on uncompressed results");
 
-              if ((ret = inflateEnd(&zs)) != Z_OK) {
+              if ((ret = inflateEnd(zstrm_p.get())) != Z_OK) {
                 throw Exception(zstrm_p.get(), ret, "inflateEnd failed");
               }
-              // check the crc32
-              size_t dlen = bgzf_default_buff_size - zstrm_p->avail_out;
             }
             // std::cerr << "inflated total_in=" << zstrm_p->total_in << " total_out=" << zstrm_p->total_out << "
             // last_bgzf_total_in=" << last_bgzf_total_in << " last_bgzf_total_out=" << last_bgzf_total_out << " total_total_in="
@@ -633,65 +634,64 @@ class base_istreambuf : public std::streambuf {
               zstrm_p.reset();
               break;
             }
-          } else if (is_bgzf) {
-          }
-          if (ret != Z_OK && ret != Z_STREAM_END) throw Exception(zstrm_p.get(), ret);
-          // update in&out pointers following inflate()
-          // std::cerr << "After Inflating avail_in=" << zstrm_p->avail_in << " avail_out=" << zstrm_p->avail_out << std::endl;
-          in_buff_start = reinterpret_cast<decltype(in_buff_start)>(zstrm_p->next_in);
-          in_buff_end = in_buff_start + zstrm_p->avail_in;
-          out_buff_free_start = reinterpret_cast<decltype(out_buff_free_start)>(zstrm_p->next_out);
-          assert(out_buff_free_start + zstrm_p->avail_out == out_buff.get() + buff_size);
+            if (ret != Z_OK && ret != Z_STREAM_END) throw Exception(zstrm_p.get(), ret);
 
-          if (!is_bgzf && ret == Z_STREAM_END) {
-            // if stream ended, deallocate inflator
-            zstrm_p.reset();
-          }
-        }
-        else {
-          int ret = inflate(zstrm_p.get(), is_bgzf ? Z_FINISH : Z_NO_FLUSH);
-          if (ret != Z_OK && ret != Z_STREAM_END) throw Exception(zstrm_p.get(), ret);
-          // update in&out pointers following inflate()
-          // std::cerr << "After Inflating avail_in=" << zstrm_p->avail_in << " avail_out=" << zstrm_p->avail_out << std::endl;
-          in_buff_start = reinterpret_cast<decltype(in_buff_start)>(zstrm_p->next_in);
-          in_buff_end = in_buff_start + zstrm_p->avail_in;
-          out_buff_free_start = reinterpret_cast<decltype(out_buff_free_start)>(zstrm_p->next_out);
-          assert(out_buff_free_start + zstrm_p->avail_out == out_buff.get() + buff_size);
+            // update in&out pointers following inflate()
+            // std::cerr << "After Inflating avail_in=" << zstrm_p->avail_in << " avail_out=" << zstrm_p->avail_out << std::endl;
+            in_buff_start = reinterpret_cast<decltype(in_buff_start)>(zstrm_p->next_in);
+            in_buff_end = in_buff_start + zstrm_p->avail_in;
+            out_buff_free_start = reinterpret_cast<decltype(out_buff_free_start)>(zstrm_p->next_out);
+            assert(out_buff_free_start + zstrm_p->avail_out == out_buff.get() + buff_size);
 
-          if (!is_bgzf && ret == Z_STREAM_END) {
-            // if stream ended, deallocate inflator
-            zstrm_p.reset();
+            if (!is_bgzf && ret == Z_STREAM_END) {
+              // if stream ended, deallocate inflator
+              zstrm_p.reset();
+            }
+          } else {
+            int ret = inflate(zstrm_p.get(), is_bgzf ? Z_FINISH : Z_NO_FLUSH);
+            if (ret != Z_OK && ret != Z_STREAM_END) throw Exception(zstrm_p.get(), ret);
+            // update in&out pointers following inflate()
+            // std::cerr << "After Inflating avail_in=" << zstrm_p->avail_in << " avail_out=" << zstrm_p->avail_out << std::endl;
+            in_buff_start = reinterpret_cast<decltype(in_buff_start)>(zstrm_p->next_in);
+            in_buff_end = in_buff_start + zstrm_p->avail_in;
+            out_buff_free_start = reinterpret_cast<decltype(out_buff_free_start)>(zstrm_p->next_out);
+            assert(out_buff_free_start + zstrm_p->avail_out == out_buff.get() + buff_size);
+
+            if (!is_bgzf && ret == Z_STREAM_END) {
+              // if stream ended, deallocate inflator
+              zstrm_p.reset();
+            }
           }
         }
       }
-    }
-    while (out_buff_free_start == out_buff.get())
-      ;
-    // 2 exit conditions:
-    // - end of input: there might or might not be output available
-    // - out_buff_free_start != out_buff: output available
-    this->setg(out_buff.get(), out_buff.get(), out_buff_free_start);
-  }
-  return this->gptr() == this->egptr() ? traits_type::eof() : traits_type::to_int_type(*this->gptr());
-}
 
-protected : std::streambuf *sbuf_p;
-std::unique_ptr<char[]> in_buff;
-char *in_buff_start;
-char *in_buff_end;
-std::unique_ptr<char[]> out_buff;
-std::unique_ptr<detail::z_stream_wrapper> zstrm_p;
-std::size_t buff_size;
-bool auto_detect;
-bool auto_detect_run;
-bool is_text;
-bool last_was_partial = false;
-bool is_bgzf;
-int window_bits;
-size_t last_bgzf_total_in = 0;
-size_t last_bgzf_total_out = 0;
-size_t total_bgzf_total_in = 0;
-size_t total_bgzf_total_out = 0;
+      while (out_buff_free_start == out_buff.get());
+      // 2 exit conditions:
+      // - end of input: there might or might not be output available
+      // - out_buff_free_start != out_buff: output available
+      this->setg(out_buff.get(), out_buff.get(), out_buff_free_start);
+    }
+    return this->gptr() == this->egptr() ? traits_type::eof() : traits_type::to_int_type(*this->gptr());
+  }
+
+ protected:
+  std::streambuf *sbuf_p;
+  std::unique_ptr<char[]> in_buff;
+  char *in_buff_start;
+  char *in_buff_end;
+  std::unique_ptr<char[]> out_buff;
+  std::unique_ptr<detail::z_stream_wrapper> zstrm_p;
+  std::size_t buff_size;
+  bool auto_detect;
+  bool auto_detect_run;
+  bool is_text;
+  bool last_was_partial = false;
+  bool is_bgzf;
+  int window_bits;
+  size_t last_bgzf_total_in = 0;
+  size_t last_bgzf_total_out = 0;
+  size_t total_bgzf_total_in = 0;
+  size_t total_bgzf_total_out = 0;
 
 };  // namespace zstr
 
