@@ -1230,7 +1230,7 @@ class bgzf_ifstream : public base_ifstream {
 
 class base_ofstream : private detail::strict_fstream_holder<strict_fstream::ofstream>, public std::ostream {
  public:
-  explicit base_ofstream(const std::string &filename, std::ios_base::openmode mode = std::ios_base::out,
+  explicit base_ofstream(const std::string filename, std::ios_base::openmode mode = std::ios_base::out,
                          int level = Z_DEFAULT_COMPRESSION, size_t buff_size = default_buff_size, bool is_bgzf = false)
       : detail::strict_fstream_holder<strict_fstream::ofstream>(filename, mode | std::ios_base::binary)
       , std::ostream(is_bgzf ? (base_ostreambuf *)new bgzf_ostreambuf(_fs.rdbuf(), bgzf_default_buff_size, level) :
@@ -1256,14 +1256,14 @@ class base_ofstream : private detail::strict_fstream_holder<strict_fstream::ofst
 
 class ofstream : public base_ofstream {
  public:
-  explicit ofstream(const std::string &filename, std::ios_base::openmode mode = std::ios_base::out,
+  explicit ofstream(const std::string filename, std::ios_base::openmode mode = std::ios_base::out,
                     int level = Z_DEFAULT_COMPRESSION, size_t buff_size = default_buff_size)
       : base_ofstream(filename, mode, level, buff_size, false) {}
 };  // class ofstream
 
 class bgzf_ofstream : public base_ofstream {
  public:
-  explicit bgzf_ofstream(const std::string &filename, std::ios_base::openmode mode = std::ios_base::out,
+  explicit bgzf_ofstream(const std::string filename, std::ios_base::openmode mode = std::ios_base::out,
                          int level = Z_DEFAULT_COMPRESSION)
       : base_ofstream(filename, mode, level, bgzf_default_buff_size, true) {}
 
