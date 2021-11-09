@@ -99,7 +99,7 @@
 
 namespace zstr {
 
-static const std::size_t default_buff_size = (std::size_t)1 << 20;
+static const std::size_t default_buff_size = static_cast<std::size_t>(1 << 20);
 
 static const int BGZF_BLOCK_SIZE = 0xff00;  // make sure compressBound(BGZF_BLOCK_SIZE) < BGZF_MAX_BLOCK_SIZE
 static const int BGZF_MAX_BLOCK_SIZE = 0x10000;
