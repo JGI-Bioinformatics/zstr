@@ -12,12 +12,16 @@
 #include <fstream>
 #include <sstream>
 #include <zlib.h>
-#include <strict_fstream.hpp>
 #include <memory>
 #include <iostream>
+#include "strict_fstream.hpp"
 
-#if __cplusplus == 201103L
-#include <zstr_make_unique_polyfill.h>
+#if defined(__GNUC__) && !defined(__clang__)
+#if (__GNUC__ > 5) || (__GNUC__ == 5 && __GNUC_MINOR__>0)
+#define CAN_MOVE_IOSTREAM
+#endif
+#else
+#define CAN_MOVE_IOSTREAM
 #endif
 
 namespace zstr
@@ -140,10 +144,10 @@ public:
           window_bits(_window_bits)
     {
         assert(sbuf_p);
-        in_buff = std::make_unique<char[]>(buff_size);
+        in_buff = std::unique_ptr<char[]>(new char[buff_size]);
         in_buff_start = in_buff.get();
         in_buff_end = in_buff.get();
-        out_buff = std::make_unique<char[]>(buff_size);
+        out_buff = std::unique_ptr<char[]>(new char[buff_size]);
         setg(out_buff.get(), out_buff.get(), out_buff.get());
     }
 
@@ -213,7 +217,7 @@ public:
                 else
                 {
                     // run inflate() on input
-                    if (! zstrm_p) zstrm_p = std::make_unique<detail::z_stream_wrapper>(true, Z_DEFAULT_COMPRESSION, window_bits);
+                    if (! zstrm_p) zstrm_p = std::unique_ptr<detail::z_stream_wrapper>(new detail::z_stream_wrapper(true, Z_DEFAULT_COMPRESSION, window_bits));
                     zstrm_p->next_in = reinterpret_cast< decltype(zstrm_p->next_in) >(in_buff_start);
                     zstrm_p->avail_in = uint32_t(in_buff_end - in_buff_start);
                     zstrm_p->next_out = reinterpret_cast< decltype(zstrm_p->next_out) >(out_buff_free_start);
@@ -266,12 +270,12 @@ public:
         : sbuf_p(_sbuf_p),
           in_buff(),
           out_buff(),
-          zstrm_p(std::make_unique<detail::z_stream_wrapper>(false, _level, _window_bits)),
+          zstrm_p(new detail::z_stream_wrapper(false, _level, _window_bits)),
           buff_size(_buff_size)
     {
         assert(sbuf_p);
-        in_buff = std::make_unique<char[]>(buff_size);
-        out_buff = std::make_unique<char[]>(buff_size);
+        in_buff = std::unique_ptr<char[]>(new char[buff_size]);
+        out_buff = std::unique_ptr<char[]>(new char[buff_size]);
         setp(in_buff.get(), in_buff.get() + buff_size);
     }
 
@@ -427,10 +431,12 @@ public:
     void close() {
         _fs.close();
     }
+    #ifdef CAN_MOVE_IOSTREAM
     void open(const std::string filename, std::ios_base::openmode mode = std::ios_base::in) {
         _fs.open(filename, mode);
         std::istream::operator=(std::istream(new istreambuf(_fs.rdbuf())));
     }
+    #endif
     bool is_open() const {
         return _fs.is_open();
     }
@@ -464,11 +470,13 @@ public:
         std::ostream::flush();
         _fs.close();
     }
+    #ifdef CAN_MOVE_IOSTREAM
     void open(const std::string filename, std::ios_base::openmode mode = std::ios_base::out, int level = Z_DEFAULT_COMPRESSION) {
         flush();
         _fs.open(filename, mode | std::ios_base::binary);
         std::ostream::operator=(std::ostream(new ostreambuf(_fs.rdbuf(), default_buff_size, level)));
     }
+    #endif
     bool is_open() const {
         return _fs.is_open();
     }
